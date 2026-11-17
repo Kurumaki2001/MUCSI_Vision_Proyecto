@@ -1,0 +1,156 @@
+# Configuración del proyecto: emparejar puntos y números.
+# Las rutas son relativas a la carpeta del proyecto (la de este fichero).
+
+# -----------------------------------------------------------------------------
+# Generador de datos sintéticos (python -m data.generate)
+#
+# Simula fotos de una ficha A4 de "unir los puntos" tomadas desde arriba con una
+# cámara cenital. Las medidas de la hoja van en milímetros y se pasan a píxeles
+# con la resolución de la cámara sobre el papel (px_per_mm).
+# -----------------------------------------------------------------------------
+generator:
+  seed: 42
+  output: data/synthetic
+  splits: {train: 2000, val: 300, test: 200}   # número de fotos de cada partición
+  processes: 12               # procesos en paralelo (no cambia el resultado, solo la velocidad)
+  samples_with_boxes: 12      # fotos de train que se guardan también con las cajas dibujadas
+
+  sheet:
+    size_mm: [210, 297]       # A4 en vertical (ancho, alto)
+    margin_mm: [12, 22]       # margen sin puntos alrededor de la hoja
+    paper_white: [232, 252]   # nivel de blanco del papel (0-255)
+    paper_tint: 4             # desviación máxima de cada canal respecto a ese blanco
+
+  camera:
+    px_per_mm: [4.0, 8.0]     # resolución sobre el papel. Orientativo: una cámara Full HD que
+                              # encuadra el A4 da unos 4 px/mm; una 4K, unos 7-8 px/mm
+    aspect_ratio: 0.75        # ancho / alto de la foto (3:4 en vertical)
+    sheet_fill: [0.82, 0.95]  # fracción del alto de la foto que ocupa la hoja (el resto es mesa)
+    max_rotation_deg: 3       # giro máximo de la hoja respecto a la cámara (±)
+    perspective: 0.015        # desplazamiento máximo de cada esquina (fracción del lado de la hoja):
+                              # la cámara no está perfectamente perpendicular
+
+  dots:
+    count: [15, 120]          # N: puntos numerados del 1 al N (si alguno no cabe, salen menos)
+    diameter_mm: [1.4, 3.5]   # diámetro de los puntos de una hoja
+    diameter_variation: 0.08  # variación relativa del diámetro entre puntos de la misma hoja
+    shape_probability: 0.7    # probabilidad de colocar los puntos por el contorno de una figura,
+                              # como en las fichas reales; si no, se reparten al azar
+
+  numbers:
+    size_pt: [8, 16]          # cuerpo de letra en puntos tipográficos (1 pt = 0,353 mm)
+    gap_mm: [0.3, 2.5]        # hueco entre el borde del punto y la caja de su número
+    separation_mm: 1.0        # separación mínima entre objetos que no son pareja
+    thicken_probability: 0.15 # probabilidad de engrosar el trazo de los números de una hoja
+    # Fuentes TrueType para cv2.FontFace: se buscan en las carpetas de fuentes del sistema.
+    # "sans" es la que trae OpenCV 5: así siempre hay al menos una, aunque falten las de Windows.
+    fonts: [arial.ttf, arialbd.ttf, calibri.ttf, calibrib.ttf, times.ttf, timesbd.ttf,
+            verdana.ttf, verdanab.ttf, tahoma.ttf, tahomabd.ttf, georgia.ttf, georgiab.ttf,
+            cour.ttf, courbd.ttf, consola.ttf, comic.ttf, comicbd.ttf, segoeui.ttf,
+            segoeuib.ttf, trebuc.ttf, DejaVuSans.ttf, DejaVuSans-Bold.ttf, DejaVuSerif.ttf,
+            LiberationSans-Regular.ttf, sans]
+
+  hard_cases:                 # casos difíciles (probabilidad por punto)
+    touching_probability: 0.05    # el número toca su punto
+    crowded_probability: 0.10     # el número se coloca casi pegado a los objetos vecinos
+    crowded_separation_mm: 0.15
+
+  ink:
+    color_probability: 0.15   # hojas impresas en color en lugar de negro o gris oscuro
+    different_dot_color_probability: 0.3   # en esas hojas, puntos y números de colores distintos
+
+  distractors:                # negativos difíciles: se dibujan pero no se etiquetan
+    title_probability: 0.6    # título y campos "Nombre:", "Fecha:"... en la parte de arriba
+    loose_letters: [0, 10]    # letras y palabras cortas repartidas por la hoja
+    hollow_circles: [0, 8]    # circunferencias sin rellenar
+
+  effects:                    # aspecto de foto
+    min_lighting: [0.70, 0.95]   # luz en la zona más oscura (1 = iluminación uniforme)
+    shadow_probability: 0.35  # sombra suave sobre la foto (brazo de la cámara, una mano...)
+    blur_sigma: [0.0, 1.2]
+    noise_sigma: [1.0, 6.0]   # ruido del sensor, en niveles de gris (0-255)
+    jpeg_quality: [60, 95]
+
+# -----------------------------------------------------------------------------
+# Dataset para YOLO (python -m ArtificialVision.prepare_yolo)
+#
+# Ultralytics reduce cada imagen hasta que su lado mayor mide imgsz. Una foto de
+# 2800 px se quedaría a un tercio y los puntos con ella, así que las fotos se
+# trocean en teselas de imgsz x imgsz a su tamaño original.
+# -----------------------------------------------------------------------------
+yolo:
+  output: ArtificialVision/yolo_dataset
+  classes: [dot, number]      # 0 = punto, 1 = número (una caja por número completo)
+  overlap: 160                # píxeles compartidos entre teselas vecinas (más que el objeto mayor)
+  min_visible_fraction: 0.3   # un objeto cortado por el borde de una tesela se etiqueta (con la caja
+                              # recortada) si se ve al menos esta fracción de su caja. Así el "5"
+                              # visible de un "45" cortado cuenta como número, que es lo que parece
+  jpeg_quality: 95
+  samples_with_boxes: 12      # teselas de train que se guardan con sus etiquetas dibujadas
+
+# -----------------------------------------------------------------------------
+# Entrenamiento (python -m ArtificialVision.train)
+# -----------------------------------------------------------------------------
+training:
+  model: ArtificialVision/models/yolo26n.pt   # preentrenado en COCO; se descarga si no está
+  imgsz: 1024                 # alto porque los objetos son pequeños (también es el lado de las teselas)
+  epochs: 100
+  patience: 20                # parada temprana: épocas seguidas sin mejorar en validación
+  max_hours: 0.9              # límite de tiempo (null = sin límite). Ultralytics recalcula las
+                              # épocas tras la primera para que el entrenamiento completo quepa
+  batch: 16
+  workers: 12                 # procesos que cargan y aumentan las imágenes (la CPU suele ser el cuello de botella)
+  seed: 42
+  fliplr: 0.0                 # sin volteo horizontal: los números nunca aparecen en espejo
+  scale: 0.3                  # zoom aleatorio de ±30 % (el generador ya varía la resolución)
+  degrees: 0.0                # sin giro extra: el generador ya gira la hoja y recalcula las cajas
+  project: ArtificialVision/results/training
+  name: yolo26n_dots_numbers
+  final_model: ArtificialVision/models/yolo26n_dots_numbers.pt
+
+# -----------------------------------------------------------------------------
+# Inferencia (python -m ArtificialVision.pipeline <foto o carpeta>)
+# -----------------------------------------------------------------------------
+inference:
+  model: ArtificialVision/models/yolo26n_dots_numbers.pt
+  output: ArtificialVision/results/inference   # si no se indica --output, se guarda en <output>/<modo>
+  max_side: 2900              # las fotos más grandes se reducen a esto: el modelo se entrenó con fotos de
+                              # hasta ~2900 px (4-8 px/mm). Después se trocean en teselas, como al entrenar
+  detection_confidence: 0.25  # umbral de confianza de YOLO
+  max_detections: 1000        # máximo de objetos por tesela
+  erase_margin: 0.3           # los puntos se borran con un círculo un 30 % mayor que el punto, del color
+                              # del papel que lo rodea (en blanco, sobre papel gris, el OCR leía el borde)
+  ocr_mode: crops             # page: EasyOCR busca y lee el texto en toda la foto;
+                              # crops: EasyOCR lee cada caja "number" de YOLO como una sola línea
+  ocr_min_confidence: 0.3     # lecturas con menos confianza se descartan (en crops, el número se queda
+                              # en el emparejamiento con value null)
+  crop_margin: 0.2            # modo crops: margen alrededor de cada caja (fracción de su altura)
+  page_params:                # modo page: parámetros de reader.readtext de EasyOCR (ajustados con 15 fotos
+                              # de validación; con los de por defecto se perdían muchos números pequeños)
+    min_size: 5               # por defecto 20 px: descartaría los números pequeños
+    width_ths: 0.1            # por defecto 0.5: con menos, no fusiona números cercanos en una sola caja
+    mag_ratio: 1.5            # amplía la foto antes de buscar texto (los números son pequeños)
+    text_threshold: 0.5       # por defecto 0.7 y 0.4: umbrales más bajos para no perder números
+    low_text: 0.3
+  join_in_order: false        # dibujar también la línea que une los puntos en orden numérico
+
+# -----------------------------------------------------------------------------
+# Emparejamiento y evaluación, comunes a los dos enfoques
+# (common/matching.py y python -m common.evaluation)
+# -----------------------------------------------------------------------------
+matching:
+  max_distance_factor: 3.0    # sin pareja por encima de 3 veces la altura mediana de los números
+
+evaluation:
+  dot_tolerance_px: 8         # un punto predicho acierta si su centro cae a menos de esto de uno real
+  number_overlap: 0.5         # solape mínimo entre la caja predicha de un número y la real, medido como
+                              # intersección / área de la caja menor (no IoU: el OCR da cajas más holgadas)
+
+# -----------------------------------------------------------------------------
+# Prueba rápida (opción --quick de los tres scripts): dataset mini y 2 épocas
+# -----------------------------------------------------------------------------
+quick:
+  data_output: data/synthetic_quick
+  splits: {train: 16, val: 4, test: 4}
+  yolo_output: ArtificialVision/yolo_dataset_quick
+  epochs: 2

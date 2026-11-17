@@ -1,0 +1,21 @@
+# Entorno virtual y cachés
+.venv/
+__pycache__/
+.pytest_cache/
+
+# Datos generados: se regeneran igual con la semilla de config.yaml
+data/synthetic/
+data/synthetic_quick/
+ArtificialVision/yolo_dataset/
+ArtificialVision/yolo_dataset_quick/
+
+# Pesos preentrenados que descarga Ultralytics y pesos intermedios de cada entrenamiento.
+# El modelo final se copia a ArtificialVision/models/, que sí se puede subir.
+yolo26n.pt
+**/weights/
+
+# Resultados de la prueba rápida (solo comprueban que todo funciona)
+ArtificialVision/results/training/*_quick/
+
+# Salidas de la inferencia (un JSON y un dibujo por foto: se regeneran con el pipeline)
+ArtificialVision/results/inference/

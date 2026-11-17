@@ -1,0 +1,13 @@
+# Dependencias del proyecto (Python 3.12).
+#
+# PyTorch con CUDA no va aquí: setup_environment.ps1 lo instala antes, desde el índice de PyTorch,
+# porque en Windows PyPI solo tiene la versión para CPU. Si se instala solo este fichero
+# (por ejemplo, en un equipo sin GPU), pip traerá PyTorch para CPU como dependencia de Ultralytics.
+ultralytics==8.4.215
+easyocr==1.7.2
+# EasyOCR pide opencv-python-headless (sin ventanas); setup_environment.ps1 lo sustituye por este.
+opencv-python==5.0.0.93
+numpy>=2.0
+scipy>=1.13
+pyyaml>=6.0
+pytest>=8.0
