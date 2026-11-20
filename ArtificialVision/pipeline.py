@@ -19,8 +19,13 @@ Pasos para cada foto (el tiempo de cada uno queda en el JSON):
        se quede con un número ajeno.
      En los dos modos se descartan las lecturas con poca confianza.
   5. Emparejamiento (common/matching.py) y diagnóstico de la secuencia 1..N.
+  6. Coordenadas reales (ArtificialVision/aruco_coords.py, si aruco.enabled). Se busca la hoja de
+     marcadores ArUco de clase y, con la homografía imagen -> hoja, cada punto recibe x_mm, y_mm.
+     La detección de los marcadores se hace justo después de YOLO, para descartar lo que YOLO
+     haya detectado dentro de un marcador (sus cuadrados negros pueden parecer puntos).
 
 Salida por foto, en la carpeta de salida: <nombre>.json (formato común) y <nombre>.jpg (dibujo).
+Si se encuentra la hoja de ArUco, además <nombre>_mm.csv: número, x_mm, y_mm en orden numérico.
 
 Uso, desde la carpeta del proyecto:
     python -m ArtificialVision.pipeline data/real                      # carpeta, modo de config.yaml
@@ -35,6 +40,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from ArtificialVision.aruco_coords import (ArucoReference, add_mm_coordinates, draw_reference, inside_markers,
+                                           save_path_csv)
 from ArtificialVision.prepare_yolo import DOT_CLASS, tile_positions
 from common import json_format
 from common.config import load_config, project_path
@@ -194,6 +201,9 @@ class Pipeline:
         self.ocr_batch = 32 if gpu else 1
         self.model = YOLO(str(project_path(self.cfg["model"])))
         self.reader = easyocr.Reader(["en"], gpu=gpu, verbose=False)
+        self.aruco_cfg = config.get("aruco") or {}
+        self.aruco = ArucoReference(self.aruco_cfg) if self.aruco_cfg.get("enabled") else None
+        self.last_reference = None  # hoja de ArUco encontrada en la última foto procesada
         # Calentamiento: la primera llamada a cada modelo es mucho más lenta (reserva memoria,
         # compila...) y falsearía el tiempo de la primera foto.
         blank = np.full((self.size, self.size, 3), 255, np.uint8)
@@ -235,6 +245,15 @@ class Pipeline:
 
         dots, numbers, scale = self.detect(image)
         lap("detection")
+        reference = None
+        if self.aruco is not None:
+            reference = self.aruco.locate(image)
+            margin = self.aruco_cfg.get("exclusion_margin", 0.15)
+            dots = [d for d in dots if not inside_markers(d["x"], d["y"], reference["all_markers"], margin)]
+            numbers = [n for n in numbers if not inside_markers((n["box"][0] + n["box"][2]) / 2,
+                                                                (n["box"][1] + n["box"][3]) / 2,
+                                                                reference["all_markers"], margin)]
+            lap("aruco")
         erased = erase_dots(image, dots, self.cfg["erase_margin"])
         lap("erase_dots")
         if ocr_mode == "page":
@@ -252,17 +271,22 @@ class Pipeline:
         max_distance = max_pair_distance(numbers, self.max_distance_factor) or 0.0
         pairs, unpaired_dots, unpaired_numbers = match_dots_numbers(dots, numbers, max_distance)
         lap("matching")
-        times["total"] = round(1000 * (time.perf_counter() - start), 1)
 
         metadata = {"approach": "ArtificialVision", "ocr_mode": ocr_mode, "working_scale": round(scale, 4),
                     "max_pair_distance": round(max_distance, 2),
                     "sequence": sequence_check([number["value"] for number in numbers])}
         height, width = image.shape[:2]
-        return json_format.create(image_name, width, height, dots, numbers, pairs, unpaired_dots,
-                                  unpaired_numbers, times_ms=times, metadata=metadata)
+        result = json_format.create(image_name, width, height, dots, numbers, pairs, unpaired_dots,
+                                    unpaired_numbers, times_ms=times, metadata=metadata)
+        if reference is not None:
+            metadata["aruco"] = add_mm_coordinates(result, reference)  # añade x_mm, y_mm a cada punto
+            times["aruco"] = round(times["aruco"] + 1000 * (time.perf_counter() - step), 1)
+        times["total"] = round(1000 * (time.perf_counter() - start), 1)
+        self.last_reference = reference  # para dibujar los marcadores y los ejes (main)
+        return result
 
 
-def describe(result):
+def describe(result, max_rms_mm=None):
     """Resumen de una línea de un resultado, con el aviso de la secuencia si falta o se repite algo."""
     text = (f"{len(result['dots'])} puntos, {len(result['numbers'])} números, {len(result['pairs'])} parejas, "
             f"{result['times_ms']['total']:.0f} ms")
@@ -270,6 +294,14 @@ def describe(result):
     if sequence and (sequence["missing"] or sequence["repeated"] or sequence["out_of_range"]):
         text += (f" | secuencia 1..{sequence['n']}: faltan {sequence['missing']}, repetidos {sequence['repeated']}, "
                  f"fuera de rango {sequence['out_of_range']}")
+    aruco = result["metadata"].get("aruco")
+    if aruco is not None:
+        if not aruco["found"]:
+            text += f" | ArUco: hoja no encontrada (marcadores {aruco['markers']}), sin coordenadas en mm"
+        else:
+            text += f" | ArUco {aruco['markers']}: error {aruco['rms_mm']:.2f} mm"
+            if max_rms_mm is not None and aruco["rms_mm"] > max_rms_mm:
+                text += f" (¡más de {max_rms_mm} mm! revisa que la hoja esté plana y en el plano de la ficha)"
     return text
 
 
@@ -300,8 +332,12 @@ def main():
         result = pipeline.process(image, path.name, mode)
         json_format.save(result, output / f"{path.stem}.json")
         drawing = draw_annotation(image, result, join_in_order=args.join or cfg["join_in_order"])
+        if pipeline.last_reference is not None:
+            draw_reference(drawing, pipeline.last_reference)
+            if pipeline.last_reference["found"]:
+                save_path_csv(result["metadata"]["aruco"], output / f"{path.stem}_mm.csv")
         write_image(output / f"{path.stem}.jpg", drawing, 90)
-        print(f"[{i}/{len(images)}] {path.name}: {describe(result)}")
+        print(f"[{i}/{len(images)}] {path.name}: {describe(result, config.get('aruco', {}).get('max_rms_mm'))}")
     print(f"Resultados en {output}")
 
 

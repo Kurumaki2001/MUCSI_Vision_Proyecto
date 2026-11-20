@@ -82,7 +82,11 @@ def test_pipeline_on_generated_photos(pipeline, generated_photos, mode, min_pair
     for photo, annotation, _ in generated_photos[:2]:
         result = pipeline.process(photo, annotation["image"], mode)
         json_format.validate(result)
-        assert set(result["times_ms"]) == {"detection", "erase_dots", "ocr", "matching", "total"}
+        stages = {"detection", "erase_dots", "ocr", "matching", "total"}
+        if CONFIG.get("aruco", {}).get("enabled"):
+            stages.add("aruco")
+            assert result["metadata"]["aruco"]["found"] is False  # las fotos sintéticas no llevan la hoja
+        assert set(result["times_ms"]) == stages
         assert all("confidence" in item for item in result["dots"] + result["numbers"])
         counts.append(evaluate_image(annotation, result, CONFIG["evaluation"]))
     summary = summarize(counts)

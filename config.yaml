@@ -135,6 +135,27 @@ inference:
   join_in_order: false        # dibujar también la línea que une los puntos en orden numérico
 
 # -----------------------------------------------------------------------------
+# Coordenadas reales con ArUco (ArtificialVision/aruco_coords.py)
+#
+# Se usa la hoja de calibración de clase: A4 con 4 marcadores DICT_4X4_50,
+# IDs 0-3, de 80 mm. Debe estar en el MISMO plano que la ficha de puntos (encima de la mesa).
+# Si se encuentra, cada punto del JSON lleva también x_mm, y_mm (origen en la esquina superior
+# izquierda de la hoja de ArUco, X a la derecha, Y hacia abajo) y se guarda <foto>_mm.csv.
+# -----------------------------------------------------------------------------
+aruco:
+  enabled: true
+  sheet: ArtificialVision/aruco_sheet/arucos_calibracion_A4.json        # posiciones reales de los marcadores
+  lens_calibration: ArtificialVision/aruco_sheet/calibracion_camara.json  # de aruco_calibrate.py, para la cámara de
+                              # clase (1280x960). Se ignora si la foto tiene otra relación de aspecto.
+                              # null = no corregir la distorsión
+  min_markers: 2              # mínimo de marcadores para calcular la homografía (con 1 se extrapola mucho)
+  refine_edges: true          # refinado sub-píxel de las esquinas por bordes
+  captures: ArtificialVision/aruco_sheet/captures   # fotos de la hoja para recalibrar la lente
+                              # (python -m ArtificialVision.aruco_capture y luego aruco_calibrate)
+  exclusion_margin: 0.15      # se descarta lo que YOLO detecte dentro de un marcador (agrandado un 15 %)
+  max_rms_mm: 1.0             # si el error en las esquinas supera esto, se avisa al procesar la foto
+
+# -----------------------------------------------------------------------------
 # Emparejamiento y evaluación, comunes a los dos enfoques
 # (common/matching.py y python -m common.evaluation)
 # -----------------------------------------------------------------------------
