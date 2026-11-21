@@ -19,3 +19,6 @@ ArtificialVision/results/training/*_quick/
 
 # Salidas de la inferencia (un JSON y un dibujo por foto: se regeneran con el pipeline)
 ArtificialVision/results/inference/
+
+# Salidas de la inferencia del enfoque clásico
+ClassicVision/results/inference/

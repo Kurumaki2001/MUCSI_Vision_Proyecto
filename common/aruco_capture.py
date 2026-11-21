@@ -6,10 +6,10 @@ nítidos, desde ángulos, inclinaciones y distancias variadas, y con los marcado
 todo el campo de visión (también por las esquinas de la imagen, donde la distorsión es mayor).
 
 Uso, desde la carpeta del proyecto:
-    python -m ArtificialVision.aruco_capture                       # ventana: ESPACIO/s guarda, a = auto, q/ESC sale
-    python -m ArtificialVision.aruco_capture --list-cams           # qué índices de cámara dan imagen
-    python -m ArtificialVision.aruco_capture --cam 1 --interval 2  # además guarda solo cada 2 s
-    python -m ArtificialVision.aruco_capture --no-gui --interval 1 --count 20
+    python -m common.aruco_capture                       # ventana: ESPACIO/s guarda, a = auto, q/ESC sale
+    python -m common.aruco_capture --list-cams           # qué índices de cámara dan imagen
+    python -m common.aruco_capture --cam 1 --interval 2  # además guarda solo cada 2 s
+    python -m common.aruco_capture --no-gui --interval 1 --count 20
 """
 
 import argparse
@@ -19,7 +19,7 @@ from pathlib import Path
 
 import cv2
 
-from ArtificialVision.aruco_coords import load_sheet, make_detector
+from common.aruco_coords import load_sheet, make_detector
 from common.config import load_config, project_path
 from common.images import write_image
 

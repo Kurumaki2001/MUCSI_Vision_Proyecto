@@ -29,9 +29,9 @@ izquierda de la hoja de ArUco, X hacia la derecha, Y hacia abajo, en milímetros
 sistema del robot (otro origen y giro) será una transformación rígida aparte.
 
 Uso independiente (sin YOLO ni OCR), desde la carpeta del proyecto:
-    python -m ArtificialVision.aruco_coords foto.png                    # marcadores y error
-    python -m ArtificialVision.aruco_coords foto.png --point 640 480    # un píxel -> mm
-    python -m ArtificialVision.aruco_coords carpeta/ --validate         # validación cruzada
+    python -m common.aruco_coords foto.png                    # marcadores y error
+    python -m common.aruco_coords foto.png --point 640 480    # un píxel -> mm
+    python -m common.aruco_coords carpeta/ --validate         # validación cruzada
 
 Para recalibrar la lente (otra cámara, resolución, enfoque o iluminación): aruco_capture.py y
 aruco_calibrate.py.

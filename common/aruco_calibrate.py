@@ -15,8 +15,8 @@ homografía plano -> imagen y la posición y el giro de cada marcador en el plan
 Recalibrar si se cambia de cámara, de resolución, de enfoque o mucho la iluminación.
 
 Uso, desde la carpeta del proyecto:
-    python -m ArtificialVision.aruco_calibrate                  # fotos de aruco.captures
-    python -m ArtificialVision.aruco_calibrate otra/carpeta --out prueba.json
+    python -m common.aruco_calibrate                  # fotos de aruco.captures
+    python -m common.aruco_calibrate otra/carpeta --out prueba.json
 """
 
 import argparse
@@ -28,7 +28,7 @@ import cv2
 import numpy as np
 from scipy.optimize import least_squares, minimize, minimize_scalar
 
-from ArtificialVision.aruco_coords import IMAGE_EXTENSIONS, LensModel, edge_refine, make_detector, sharpness
+from common.aruco_coords import IMAGE_EXTENSIONS, LensModel, edge_refine, make_detector, sharpness
 from common.config import load_config, project_path
 from common.images import read_image
 
@@ -116,7 +116,7 @@ def main():
     parser.add_argument("folder", type=Path, nargs="?", default=project_path(cfg["captures"]),
                         help="carpeta con las fotos (por defecto aruco.captures)")
     parser.add_argument("--out", type=Path, default=project_path(cfg["lens_calibration"] or
-                                                                 "ArtificialVision/aruco_sheet/calibracion_camara.json"))
+                                                                 "aruco_sheet/calibracion_camara.json"))
     parser.add_argument("--min-markers", type=int, default=3, help="marcadores mínimos para usar una foto")
     parser.add_argument("--min-sharp", type=float, default=6.0, help="nitidez mínima para usar una foto")
     parser.add_argument("--no-offset", action="store_true", help="no estimar el desplazamiento de borde")
@@ -147,7 +147,7 @@ def main():
         shape = gray.shape
     if len(frames) < 3:
         raise SystemExit(f"Solo {len(frames)} fotos útiles en {args.folder} (≥{args.min_markers} marcadores y "
-                         "nítidas). Captura más con python -m ArtificialVision.aruco_capture")
+                         "nítidas). Captura más con python -m common.aruco_capture")
     print(f"{len(frames)} fotos útiles de {len(files)} ({shape[1]}x{shape[0]})")
 
     def refined(offset):

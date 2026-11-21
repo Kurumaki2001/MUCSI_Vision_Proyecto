@@ -135,7 +135,7 @@ inference:
   join_in_order: false        # dibujar también la línea que une los puntos en orden numérico
 
 # -----------------------------------------------------------------------------
-# Coordenadas reales con ArUco (ArtificialVision/aruco_coords.py)
+# Coordenadas reales con ArUco (common/aruco_coords.py), para los dos enfoques
 #
 # Se usa la hoja de calibración de clase: A4 con 4 marcadores DICT_4X4_50,
 # IDs 0-3, de 80 mm. Debe estar en el MISMO plano que la ficha de puntos (encima de la mesa).
@@ -144,16 +144,64 @@ inference:
 # -----------------------------------------------------------------------------
 aruco:
   enabled: true
-  sheet: ArtificialVision/aruco_sheet/arucos_calibracion_A4.json        # posiciones reales de los marcadores
-  lens_calibration: ArtificialVision/aruco_sheet/calibracion_camara.json  # de aruco_calibrate.py, para la cámara de
+  sheet: aruco_sheet/arucos_calibracion_A4.json        # posiciones reales de los marcadores
+  lens_calibration: aruco_sheet/calibracion_camara.json  # de aruco_calibrate.py, para la cámara de
                               # clase (1280x960). Se ignora si la foto tiene otra relación de aspecto.
                               # null = no corregir la distorsión
   min_markers: 2              # mínimo de marcadores para calcular la homografía (con 1 se extrapola mucho)
   refine_edges: true          # refinado sub-píxel de las esquinas por bordes
-  captures: ArtificialVision/aruco_sheet/captures   # fotos de la hoja para recalibrar la lente
-                              # (python -m ArtificialVision.aruco_capture y luego aruco_calibrate)
-  exclusion_margin: 0.15      # se descarta lo que YOLO detecte dentro de un marcador (agrandado un 15 %)
+  captures: aruco_sheet/captures   # fotos de la hoja para recalibrar la lente
+                              # (python -m common.aruco_capture y luego aruco_calibrate)
+  exclusion_margin: 0.15      # se descarta lo detectado dentro de un marcador (agrandado un 15 %)
   max_rms_mm: 1.0             # si el error en las esquinas supera esto, se avisa al procesar la foto
+
+# -----------------------------------------------------------------------------
+# Visión clásica (python -m ClassicVision.pipeline <foto o carpeta>)
+#
+# Solo OpenCV y reglas: nada se entrena. Las medidas relativas (fracciones, factores) hacen que
+# los mismos valores sirvan para fotos de cualquier resolución.
+# -----------------------------------------------------------------------------
+classic:
+  output: ClassicVision/results/inference
+  # Hoja y tinta (ClassicVision/preprocess.py)
+  paper_work_side: 800        # la hoja se busca en una copia reducida a este lado mayor (px)
+  paper_min_fraction: 0.10    # una zona de papel debe ocupar al menos el 10 % de la foto
+  paper_erode: 0.02           # la hoja se encoge un 2 % del lado mayor: fuera el borde, su sombra y la mesa
+                              # (las fichas tienen márgenes de más de 1 cm sin puntos)
+  background_kernel: 0.03     # núcleo del cierre que estima el papel: fracción del lado menor de la foto
+                              # (mayor que cualquier punto o trazo, para que los borre)
+  ink_threshold: [0.22, 0.35] # tinta: manchas más oscuras que el papel en un 22 % con algún píxel que lo sea en un 35 %
+  min_blob_area: 6            # manchas más pequeñas (px) son ruido
+  # Puntos (ClassicVision/dots.py)
+  dot_min_radius_px: 2.0
+  dot_min_fill: 0.75          # área / círculo mínimo que la contiene
+  dot_min_roundness: 0.88     # eje menor / eje mayor de la elipse equivalente
+  dot_min_solidity: 0.90      # área / envolvente convexa
+  dot_size_band: [0.8, 1.25] # radio admitido respecto a la mediana de los candidatos
+  split_min_area: 0.7         # manchas que no son puntos y miden más que esto x área de un punto se revisan
+                              # (¿un punto con su número pegado?)
+  split_kernel: 1.3           # diámetro de la apertura que separa punto y número, en radios de punto
+  split_max_sectors: 5        # un punto separado así solo puede tocar tinta en 5 de 12 sectores (150°), seguidos
+  erase_margin: 1.15          # los puntos se borran de la tinta con un círculo un 15 % mayor
+  # Caracteres y números (ClassicVision/digits.py)
+  char_min_height_px: 5
+  char_max_aspect: 4.0        # más ancho que 4 veces su alto: es una raya, no un carácter
+  char_height_band: [0.55, 1.6]   # alto admitido respecto a la mediana de los caracteres
+  piece_overlap: 0.6          # dos trozos que se solapan en horizontal más de esto son un carácter
+  split_aspect: 1.0           # una mancha más ancha que alta son dígitos pegados
+  digit_aspect: 0.62          # ancho típico de un dígito / su alto si no se puede medir en la foto
+  pitch_factor: 1.15          # dos caracteres son del mismo número si sus centros distan como mucho
+                              # 1,15 veces el paso entre dígitos de la fuente (medido en cada foto)
+  max_digit_gap: 0.7          # y el hueco entre sus cajas no pasa de 0,7 alturas de carácter
+  max_height_ratio: 1.6       # dígitos de un mismo número con alturas parecidas
+  max_digits: 3               # números del 1 al 999; un grupo más largo es una palabra
+  number_min_score: 0.70      # similitud media mínima con las plantillas para ser un número
+  ocr_min_confidence: 0.60    # por debajo, el número se queda con value null
+  template_fonts: [arial.ttf, arialbd.ttf, calibri.ttf, calibrib.ttf, times.ttf, timesbd.ttf,
+                   verdana.ttf, verdanab.ttf, tahoma.ttf, tahomabd.ttf, georgia.ttf, georgiab.ttf,
+                   cour.ttf, courbd.ttf, consola.ttf, comic.ttf, comicbd.ttf, segoeui.ttf,
+                   segoeuib.ttf, trebuc.ttf, sans]
+  join_in_order: false
 
 # -----------------------------------------------------------------------------
 # Emparejamiento y evaluación, comunes a los dos enfoques

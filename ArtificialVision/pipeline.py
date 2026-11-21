@@ -40,7 +40,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from ArtificialVision.aruco_coords import (ArucoReference, add_mm_coordinates, draw_reference, inside_markers,
+from common.aruco_coords import (ArucoReference, add_mm_coordinates, draw_reference, inside_markers,
                                            save_path_csv)
 from ArtificialVision.prepare_yolo import DOT_CLASS, tile_positions
 from common import json_format

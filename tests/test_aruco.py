@@ -4,7 +4,7 @@ import cv2
 import numpy as np
 import pytest
 
-from ArtificialVision.aruco_coords import (ArucoReference, add_mm_coordinates, inside_markers, leave_one_out,
+from common.aruco_coords import (ArucoReference, add_mm_coordinates, inside_markers, leave_one_out,
                                            load_sheet, to_mm)
 from common.config import load_config, project_path
 
