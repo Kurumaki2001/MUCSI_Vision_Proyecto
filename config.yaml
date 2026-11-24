@@ -145,6 +145,8 @@ inference:
 aruco:
   enabled: true
   sheet: aruco_sheet/arucos_calibracion_A4.json        # posiciones reales de los marcadores
+  detect_dictionary: DICT_4X4_1000   # se detectan todos los marcadores 4x4 (para no tomarlos por puntos);
+                              # para medir solo cuentan los de la hoja
   lens_calibration: aruco_sheet/calibracion_camara.json  # de aruco_calibrate.py, para la cámara de
                               # clase (1280x960). Se ignora si la foto tiene otra relación de aspecto.
                               # null = no corregir la distorsión
@@ -170,7 +172,8 @@ classic:
                               # (las fichas tienen márgenes de más de 1 cm sin puntos)
   background_kernel: 0.03     # núcleo del cierre que estima el papel: fracción del lado menor de la foto
                               # (mayor que cualquier punto o trazo, para que los borre)
-  ink_threshold: [0.22, 0.35] # tinta: manchas más oscuras que el papel en un 22 % con algún píxel que lo sea en un 35 %
+  ink_threshold: [0.10, 0.18] # manchas más oscuras que el papel en un 10 % con algún píxel que lo sea en un 18 %
+  ink_relative: 0.25          # y, dentro de cada mancha, solo lo que llega al 25 % de su oscuridad máxima
   min_blob_area: 6            # manchas más pequeñas (px) son ruido
   # Puntos (ClassicVision/dots.py)
   dot_min_radius_px: 2.0
@@ -201,6 +204,13 @@ classic:
                    verdana.ttf, verdanab.ttf, tahoma.ttf, tahomabd.ttf, georgia.ttf, georgiab.ttf,
                    cour.ttf, courbd.ttf, consola.ttf, comic.ttf, comicbd.ttf, segoeui.ttf,
                    segoeuib.ttf, trebuc.ttf, sans]
+  try_rotations: true         # leer los números también con la foto girada 90°, 180° y 270° (fichas de lado)
+  # Segundo intento para números muy claros: solo si la primera lectura recupera menos del 95 %
+  # de la secuencia 1..N; se queda la mejor lectura (las fotos que salen bien no cambian)
+  retry_below: 0.95
+  retries:
+    - {ink_threshold: [0.05, 0.12], ink_relative: 0.2}   # umbrales más bajos: no perder lo claro
+    - {blur: 0.8}                                         # oscuridad suavizada: une trazos rotos
   join_in_order: false
 
 # -----------------------------------------------------------------------------

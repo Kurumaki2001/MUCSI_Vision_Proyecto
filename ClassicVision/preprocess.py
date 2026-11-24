@@ -38,16 +38,20 @@ def paper_mask(image, cfg):
     _, mask = cv2.threshold(score, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (odd(0.03 * max(small.shape)),) * 2)
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)  # rellena las letras y los puntos
+    # Apertura: corta las uniones finas entre la hoja y otras zonas claras (bordes de la mesa,
+    # otro papel asomando), para que no formen una sola zona con la mesa en medio.
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
 
-    # Zonas de papel: contornos exteriores grandes, rellenos y aproximados por su envolvente
-    # convexa (la hoja es un cuadrilátero; una sombra en una esquina no debe recortarla).
+    # Zonas de papel: contornos exteriores grandes, rellenos con su propia forma. No se usa la
+    # envolvente convexa: si la zona de papel tiene forma de U (hoja + tiras claras en los bordes
+    # de la foto), la envolvente metía la mesa de en medio.
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     big = [c for c in contours if cv2.contourArea(c) >= cfg["paper_min_fraction"] * mask.size]
     if not big:
         return np.full((height, width), 255, np.uint8), None
     filled = np.zeros_like(mask)
+    cv2.drawContours(filled, big, -1, 255, -1)
     hulls = [cv2.convexHull(c) for c in big]
-    cv2.drawContours(filled, hulls, -1, 255, -1)
     # Se encoge un poco para no tomar el borde de la hoja (y su sombra) por tinta.
     filled = cv2.erode(filled, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (odd(cfg["paper_erode"] * max(small.shape)),) * 2))
     full = cv2.resize(filled, (width, height), interpolation=cv2.INTER_NEAREST)
@@ -79,8 +83,17 @@ def ink_mask(dark, paper, cfg):
     low, high = cfg["ink_threshold"]
     weak = cv2.bitwise_and((dark > low).astype(np.uint8) * 255, paper)
     count, labels = cv2.connectedComponents(weak, connectivity=8)
-    strong = labels[(dark > high) & (weak > 0)]
-    keep = np.zeros(count, bool)
-    keep[np.unique(strong)] = True
+    # Oscuridad máxima de cada mancha (np.maximum.at: máximo por etiqueta)
+    peak = np.zeros(count, np.float32)
+    np.maximum.at(peak, labels.ravel(), dark.ravel())
+    keep = peak > high
     keep[0] = False  # la etiqueta 0 es el fondo
-    return keep[labels].astype(np.uint8) * 255
+    ink = keep[labels]
+    ratio = cfg.get("ink_relative", 0)
+    if ratio:
+        # Umbral relativo a cada mancha: un píxel es tinta si llega a 'ratio' de la oscuridad máxima
+        # de su mancha. Un número impreso en gris claro (máximo 0,3) se queda con lo que pase de
+        # 0,15; un dígito negro y grueso (máximo 0,9), con lo que pase de 0,45, así que su halo
+        # desenfocado no lo pega al dígito vecino.
+        ink &= dark > ratio * peak[labels]
+    return ink.astype(np.uint8) * 255

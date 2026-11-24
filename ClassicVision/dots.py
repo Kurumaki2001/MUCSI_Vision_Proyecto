@@ -167,9 +167,13 @@ def detect_dots(ink, cfg):
             if f["area"] >= cfg["split_min_area"] * dot_area:
                 dots += [make_dot(g, x + dx, y + dy) for g, dx, dy in split_merged(mask, radius, cfg)]
 
-    # Se borran los puntos de la tinta (con margen) para que no se lean como parte de los números
+    return dots, erase_dots(ink, dots, cfg), radius
+
+
+def erase_dots(ink, dots, cfg):
+    """Copia de la tinta sin los puntos (borrados con margen), para que no se lean como números."""
     text_ink = ink.copy()
     for dot in dots:
         cv2.circle(text_ink, (round(dot["x"] - 0.5), round(dot["y"] - 0.5)),
                    round(dot["r"] * cfg["erase_margin"] + 1), 0, -1)
-    return dots, text_ink, radius
+    return text_ink

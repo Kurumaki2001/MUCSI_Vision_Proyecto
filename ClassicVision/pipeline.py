@@ -7,7 +7,10 @@ Pasos para cada foto (el tiempo de cada uno queda en el JSON):
   3. dots: puntos = manchas redondas, rellenas y del tamaño típico (contornos y reglas de forma;
      los puntos pegados a su número se separan con una apertura). ClassicVision/dots.py.
   4. ocr: el resto de la tinta se separa en caracteres, se agrupan en números y cada dígito se
-     reconoce comparándolo con plantillas de dígitos (ClassicVision/digits.py).
+     reconoce comparándolo con plantillas de dígitos (ClassicVision/digits.py), probando la foto
+     derecha y girada 90°, 180° y 270°. Si la lectura recupera poco de la secuencia 1..N (números
+     impresos muy claros), se repite con umbrales más bajos o con la oscuridad suavizada y se
+     queda la mejor (retry_faint_numbers).
   5. aruco (si aruco.enabled): hoja de marcadores -> coordenadas en mm (common/aruco_coords.py).
      Lo que cae dentro de un marcador se descarta antes de emparejar.
   6. matching: algoritmo húngaro con la distancia punto-rectángulo (common/matching.py), igual
@@ -28,12 +31,13 @@ import time
 from pathlib import Path
 
 import cv2
+import numpy as np
 
-from ClassicVision.digits import build_templates, read_numbers, template_fonts
-from ClassicVision.dots import detect_dots
+from ClassicVision.digits import build_templates, read_numbers_any_orientation, reading_score, template_fonts
+from ClassicVision.dots import detect_dots, erase_dots
 from ClassicVision.preprocess import darkness, ink_mask, paper_mask
 from common import json_format
-from common.aruco_coords import ArucoReference, add_mm_coordinates, draw_reference, inside_markers, save_path_csv
+from common.aruco_coords import ArucoReference, add_mm_coordinates, draw_reference, save_path_csv
 from common.config import load_config, project_path
 from common.drawing import draw_annotation
 from common.images import read_image, write_image
@@ -54,6 +58,30 @@ class Pipeline:
         self.last_reference = None  # hoja de ArUco de la última foto (para dibujarla)
         self.last_masks = None      # máscaras intermedias de la última foto (para --debug)
 
+    def retry_faint_numbers(self, numbers, rotation, dark, paper, dots):
+        """Segundo intento de lectura para fichas con los números muy claros.
+
+        Si la primera lectura recupera menos de retry_below de la secuencia 1..N (N = puntos), se
+        vuelve a separar la tinta del texto con los ajustes de cada entrada de retries: umbrales
+        más bajos (para no perder las partes claras de los trazos) o la oscuridad suavizada con un
+        filtro Gaussiano (une los trozos de un trazo roto). Se queda la lectura con mejor
+        reading_score. Si la primera ya esta bien, no se toca nada
+        Devuelve (números, giro, número de intento elegido: 0 = el normal).
+        """
+        expected = len(dots)
+        best, best_rotation, best_attempt = numbers, rotation, 0
+        if reading_score(numbers, expected)[0] >= self.cfg["retry_below"] * expected:
+            return best, best_rotation, best_attempt
+        for attempt, variant in enumerate(self.cfg.get("retries", []), start=1):
+            settings = {**self.cfg, **variant}
+            source = cv2.GaussianBlur(dark, (0, 0), variant["blur"]) if variant.get("blur") else dark
+            text_ink = erase_dots(ink_mask(source, paper, settings), dots, self.cfg)
+            candidate, candidate_rotation = read_numbers_any_orientation(text_ink, dark, self.templates,
+                                                                         self.cfg, expected)
+            if reading_score(candidate, expected) > reading_score(best, expected):
+                best, best_rotation, best_attempt = candidate, candidate_rotation, attempt
+        return best, best_rotation, best_attempt
+
     def process(self, image, image_name):
         """Procesa una foto (BGR) y devuelve el resultado en el formato común."""
         times = {}
@@ -67,23 +95,23 @@ class Pipeline:
 
         paper, sheet_polygon = paper_mask(image, self.cfg)
         lap("paper")
+        reference = None
+        if self.aruco is not None:
+            reference = self.aruco.locate(image)
+            margin = self.aruco_cfg.get("exclusion_margin", 0.15)
+            for _, quad in reference["all_markers"]:
+                center = quad.mean(0)
+                grown = np.round(center + (quad - center) * (1 + margin)).astype(np.int32)
+                cv2.fillConvexPoly(paper, grown, 0)
+            lap("aruco")
         dark = darkness(image, self.cfg)
         ink = ink_mask(dark, paper, self.cfg)
         lap("ink")
         dots, text_ink, dot_radius = detect_dots(ink, self.cfg)
         lap("dots")
-        numbers = read_numbers(text_ink, dark, self.templates, self.cfg)
+        numbers, rotation = read_numbers_any_orientation(text_ink, dark, self.templates, self.cfg, len(dots))
+        numbers, rotation, attempt = self.retry_faint_numbers(numbers, rotation, dark, paper, dots)
         lap("ocr")
-
-        reference = None
-        if self.aruco is not None:
-            reference = self.aruco.locate(image)
-            margin = self.aruco_cfg.get("exclusion_margin", 0.15)
-            dots = [d for d in dots if not inside_markers(d["x"], d["y"], reference["all_markers"], margin)]
-            numbers = [n for n in numbers if not inside_markers((n["box"][0] + n["box"][2]) / 2,
-                                                                (n["box"][1] + n["box"][3]) / 2,
-                                                                reference["all_markers"], margin)]
-            lap("aruco")
 
         dots = [{"id": i, "x": d["x"], "y": d["y"], "confidence": d["confidence"], "box": d["box"]}
                 for i, d in enumerate(dots)]
@@ -93,6 +121,8 @@ class Pipeline:
         lap("matching")
 
         metadata = {"approach": "ClassicVision", "max_pair_distance": round(max_distance, 2),
+                    "text_rotation_deg": rotation,  # giro con el que se han leído los números
+                    "ocr_attempt": attempt,         # 0 = lectura normal; 1, 2... = segundo intento (classic.retries)
                     "dot_radius_px": round(dot_radius, 2) if dot_radius else None,
                     "sheet_polygon": sheet_polygon.round(1).tolist() if sheet_polygon is not None else None,
                     "sequence": sequence_check([number["value"] for number in numbers])}

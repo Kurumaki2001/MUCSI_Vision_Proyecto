@@ -38,6 +38,34 @@ def test_ink_survives_uneven_lighting():
     assert cv2.countNonZero(ink) < 2 * np.pi * 10 ** 2   # y el papel en sombra no
 
 
+def test_light_gray_numbers_are_ink_and_black_neighbours_stay_apart():
+    # Como en las fichas reales: un número gris claro (oscuridad ~0,25) junto a un punto negro
+    image = np.full((1000, 1200, 3), 245, np.uint8)
+    cv2.putText(image, "37", (500, 520), HERSHEY[0], 1.2, (185, 185, 185), 2, cv2.LINE_AA)
+    cv2.circle(image, (470, 505), 9, (40, 40, 40), -1)
+    paper = np.full(image.shape[:2], 255, np.uint8)
+    ink = ink_mask(darkness(image, CFG), paper, CFG)
+    assert cv2.countNonZero(ink[490:525, 500:560]) > 80    # el "37" gris entra como tinta
+    assert ink[505, 470] == 255                            # y el punto también
+
+
+def test_numbers_are_read_on_a_sideways_sheet():
+    from ClassicVision.digits import read_numbers_any_orientation
+    templates = build_templates(HERSHEY)
+    page = np.zeros((600, 800), np.uint8)
+    for i, value in enumerate(["12", "13", "14", "15"]):
+        cv2.putText(page, value, (100 + 150 * i, 300), HERSHEY[0], 1.5, 255, 3, cv2.LINE_AA)
+    sideways = np.ascontiguousarray(np.rot90(page)).astype(np.float32) / 255   # la ficha, de lado
+    ink = ((sideways > 0.3) * 255).astype(np.uint8)
+    numbers, degrees = read_numbers_any_orientation(ink, sideways, templates, CFG, expected=20)
+    assert degrees == 270
+    assert sorted(n["value"] for n in numbers) == [12, 13, 14, 15]
+    for n in numbers:                                      # las cajas vuelven a la foto girada
+        x0, y0, x1, y1 = n["box"]
+        assert 0 <= x0 < x1 <= sideways.shape[1] and 0 <= y0 < y1 <= sideways.shape[0]
+        assert y1 - y0 > x1 - x0                           # números en vertical: cajas altas
+
+
 def test_paper_is_separated_from_a_wooden_table():
     image = np.full((800, 600, 3), (60, 110, 160), np.uint8)   # mesa marrón (BGR)
     image[100:700, 100:500] = 240                              # hoja blanca

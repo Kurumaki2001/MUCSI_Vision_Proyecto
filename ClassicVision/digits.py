@@ -64,8 +64,13 @@ def render_digit(digit, font, size=64):
     canvas = np.zeros((3 * size, 3 * size), np.uint8)
     if isinstance(font, int):
         cv2.putText(canvas, digit, (size, 2 * size), font, size / 30, 255, max(1, size // 20), cv2.LINE_AA)
-    else:
+    elif hasattr(cv2, "FontFace"):  # OpenCV 5 dibuja fuentes TrueType
         cv2.putText(canvas, digit, (size, 2 * size), 255, cv2.FontFace(font), size)
+    else:  # OpenCV 4 no sabe: se dibuja con Pillow (lo instala Ultralytics) y se pasa a NumPy
+        from PIL import Image, ImageDraw, ImageFont
+        image = Image.fromarray(canvas)
+        ImageDraw.Draw(image).text((size, size // 2), digit, fill=255, font=ImageFont.truetype(font, size))
+        canvas = np.array(image)
     return canvas
 
 
@@ -86,15 +91,22 @@ def build_templates(fonts):
 
 
 def template_fonts(names):
-    """Fuentes para las plantillas: las TrueType de la lista si OpenCV las admite (OpenCV 5).
+    """Fuentes para las plantillas: las TrueType de la lista que estén instaladas.
 
-    El nombre "hershey" añade las fuentes Hershey que trae OpenCV. Sin cv2.FontFace (OpenCV 4)
-    solo se pueden usar esas.
+    El nombre "hershey" añade las fuentes Hershey que trae OpenCV. Con OpenCV 4 (sin
+    cv2.FontFace) las TrueType se dibujan con Pillow; si tampoco hay Pillow, solo quedan las
+    Hershey. "sans" es una fuente interna de OpenCV 5: con OpenCV 4 se omite.
     """
-    hershey = tuple(HERSHEY_FONTS) if "hershey" in names or not hasattr(cv2, "FontFace") else ()
+    hershey = tuple(HERSHEY_FONTS) if "hershey" in names else ()
     truetype = [name for name in names if name != "hershey"]
-    if not truetype or not hasattr(cv2, "FontFace"):
-        return hershey
+    if not hasattr(cv2, "FontFace"):
+        truetype = [name for name in truetype if name.lower().endswith((".ttf", ".otf"))]
+        try:
+            import PIL  # noqa: F401  (solo se comprueba que está)
+        except ImportError:
+            truetype = []
+    if not truetype:
+        return hershey or tuple(HERSHEY_FONTS)
     from data.generate import available_fonts  # busca las fuentes en las carpetas del sistema
     return hershey + tuple(available_fonts(truetype))
 
@@ -271,6 +283,58 @@ def group_numbers(chars, height, cfg):
     for i, c in enumerate(chars):
         groups.setdefault(root(i), []).append(c)
     return [sorted(g, key=lambda c: c.x0) for g in groups.values()]
+
+
+def rotate_box_back(box, k, width, height):
+    """Caja de la imagen girada k x 90° (np.rot90, antihorario) -> caja en la imagen original.
+
+    width y height son los de la imagen original. Se transforman las dos esquinas y se toma la
+    caja que las contiene.
+    """
+    x0, y0, x1, y1 = box
+    if k == 0:
+        return box
+    if k == 1:    # girada: (x', y') -> original (W - y', x')
+        corners = [(width - y0, x0), (width - y1, x1)]
+    elif k == 2:  # (x', y') -> (W - x', H - y')
+        corners = [(width - x0, height - y0), (width - x1, height - y1)]
+    else:         # k == 3: (x', y') -> (y', H - x')
+        corners = [(y0, height - x0), (y1, height - x1)]
+    xs, ys = [c[0] for c in corners], [c[1] for c in corners]
+    return [float(min(xs)), float(min(ys)), float(max(xs)), float(max(ys))]
+
+
+def reading_score(numbers, expected):
+    """Lo buena que es una lectura: (números distintos leídos dentro de 1..expected, similitud media).
+
+    En la orientación correcta aparece casi toda la secuencia 1..N de la ficha (N = número de
+    puntos). En una equivocada, los números de varios dígitos se parten en dígitos sueltos o se
+    leen mal: aunque salgan muchos "números", casi todos son 1-9 repetidos o se salen de la
+    secuencia. La similitud media solo desempata (por ejemplo, en fichas de menos de 10 puntos).
+    """
+    values = {n["value"] for n in numbers if n["value"] is not None and 1 <= n["value"] <= max(expected, 1)}
+    confidences = [n["confidence"] for n in numbers if n["value"] is not None]
+    return len(values), float(np.mean(confidences)) if confidences else 0.0
+
+
+def read_numbers_any_orientation(text_ink, dark, templates, cfg, expected):
+    """Lee los números probando la foto derecha y girada 90°, 180° y 270°.
+
+    Las plantillas son dígitos derechos, así que en una ficha fotografiada de lado o del revés los
+    números no se leerían. Se queda la lectura con mejor reading_score (expected = número de
+    puntos encontrados). Devuelve (números con cajas en la foto original, grados).
+    """
+    height, width = text_ink.shape[:2]
+    best, best_k = read_numbers(text_ink, dark, templates, cfg), 0
+    if cfg.get("try_rotations", True):
+        for k in (1, 2, 3):
+            numbers = read_numbers(np.ascontiguousarray(np.rot90(text_ink, k)),
+                                   np.ascontiguousarray(np.rot90(dark, k)), templates, cfg)
+            if reading_score(numbers, expected) > reading_score(best, expected):
+                best, best_k = numbers, k
+    for number in best:
+        number["box"] = rotate_box_back(number["box"], best_k, width, height)
+    return best, 90 * best_k
 
 
 def read_numbers(text_ink, dark, templates, cfg):

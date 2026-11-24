@@ -220,7 +220,10 @@ class ArucoReference:
     def __init__(self, cfg):
         self.cfg = cfg
         self.sheet = load_sheet(project_path(cfg["sheet"]))
-        self.detector = make_detector(self.sheet["dictionary"])
+        # Se detecta con un diccionario más amplio que el de la hoja (DICT_4X4_1000 contiene los 50
+        # de DICT_4X4_50 con los mismos IDs): así se encuentran también los marcadores de otras
+        # fichas, para no confundirlos con puntos o números. Para medir solo se usan los de la hoja.
+        self.detector = make_detector(cfg.get("detect_dictionary") or self.sheet["dictionary"])
         lens_path = cfg.get("lens_calibration")
         self.lens = LensModel.load(project_path(lens_path)) if lens_path else None
 
