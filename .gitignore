@@ -30,6 +30,7 @@ ClassicVision/results/inference/
 
 # Rotuladores: vídeos, fotos y dataset (se regeneran) y salidas. Los pesos de SAM ya se ignoran arriba
 data/pens/videos/
+Videos Rotuladores/
 data/pens/frames/
 ArtificialVision/pens_dataset/
 ArtificialVision/results/pens/
