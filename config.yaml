@@ -258,3 +258,41 @@ quick:
   splits: {train: 16, val: 4, test: 4}
   yolo_output: ArtificialVision/yolo_dataset_quick
   epochs: 2
+
+# -----------------------------------------------------------------------------
+# Rotuladores Edding 1200 (ArtificialVision/pens/): YOLO (1 clase) + SAM + color en HSV + ArUco
+#
+# Flujo: pens.frames -> pens.label_sam -> pens.prepare_dataset -> pens.train -> pens.pipeline
+# Cómo grabar los vídeos: Documentacion_Rotuladores/video.md
+# -----------------------------------------------------------------------------
+pens:
+  classes: [rotulador]        # una sola clase: el color lo decide el HSV, no YOLO
+  videos: data/pens/videos    # vídeos de los rotuladores (no se suben a git)
+  frames: data/pens/frames    # fotos sacadas de los vídeos
+  labels: data/pens/labels    # etiquetas YOLO hechas con SAM
+  dataset: ArtificialVision/pens_dataset   # dataset montado (train/val por vídeo) y su data.yaml
+  model: ArtificialVision/models/yolo26n_pens.pt   # modelo entrenado
+  sam_model: ArtificialVision/models/sam2.1_b.pt  # pesos de SAM 2.1 (los mismos que annotation.sam_model)
+  segmenter: sam              # sam: silueta con SAM a partir de la caja de YOLO; grabcut: con GrabCut (tema 5)
+  imgsz: 640                  # los rotuladores son grandes en la foto: no hace falta 1024 ni teselas
+  detection_confidence: 0.4
+  output: ArtificialVision/results/pens
+  training:
+    epochs: 100
+    patience: 20              # parada temprana
+    batch: 16
+    seed: 42
+    fliplr: 0.5               # volteos permitidos: un rotulador puede estar en cualquier orientación
+    flipud: 0.5
+    degrees: 0.0              # sin giros: las cajas de YOLO son rectas y se agrandarían
+    scale: 0.3
+    project: ArtificialVision/results/training
+    name: yolo26n_pens
+  color:                      # reglas HSV (OpenCV: H de 0 a 179, S y V de 0 a 255)
+    min_saturation: 90        # un píxel "de color" necesita saturación...
+    min_value: 60             # ...y brillo suficientes (si no, es blanco, gris o sombra)
+    blue_hue: [95, 130]
+    red_hue: [10, 170]        # rojo: H <= 10 o H >= 170 (el rojo está en los dos extremos del círculo)
+    black_max_value: 60       # negro: brillo muy bajo, sea cual sea el tono
+    min_color_fraction: 0.04  # al menos un 4 % de la silueta roja o azul (capuchón y tapón)
+    min_black_fraction: 0.08  # al menos un 8 % negro (más que las letras impresas en el cuerpo)

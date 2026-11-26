@@ -27,3 +27,9 @@ ArtificialVision/results/inference/
 
 # Salidas de la inferencia del enfoque clásico
 ClassicVision/results/inference/
+
+# Rotuladores: vídeos, fotos y dataset (se regeneran) y salidas. Los pesos de SAM ya se ignoran arriba
+data/pens/videos/
+data/pens/frames/
+ArtificialVision/pens_dataset/
+ArtificialVision/results/pens/
