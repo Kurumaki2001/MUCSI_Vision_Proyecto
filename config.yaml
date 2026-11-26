@@ -149,7 +149,9 @@ aruco:
                               # para medir solo cuentan los de la hoja
   lens_calibration: aruco_sheet/calibracion_camara.json  # de aruco_calibrate.py, para la cámara de
                               # clase (1280x960). Se ignora si la foto tiene otra relación de aspecto.
-                              # null = no corregir la distorsión
+                              # null = no corregir la distorsión. PENDIENTE: recalibrar con la cámara del
+                              # proyecto (1920x1080, 16:9); hasta entonces sus fotos van sin corrección
+                              # de lente, porque la relación de aspecto no coincide
   min_markers: 2              # mínimo de marcadores para calcular la homografía (con 1 se extrapola mucho)
   refine_edges: true          # refinado sub-píxel de las esquinas por bordes
   captures: aruco_sheet/captures   # fotos de la hoja para recalibrar la lente
@@ -212,6 +214,29 @@ classic:
     - {ink_threshold: [0.05, 0.12], ink_relative: 0.2}   # umbrales más bajos: no perder lo claro
     - {blur: 0.8}                                         # oscuridad suavizada: une trazos rotos
   join_in_order: false
+
+# -----------------------------------------------------------------------------
+# Fotos reales: fotogramas de vídeo (python -m tools.extract_frames) y etiquetado con SAM
+# (python -m tools.annotate_sam). Adaptado de sacar_fotogramas.py y etiquetar_sam.py de clase.
+# -----------------------------------------------------------------------------
+real_data:
+  videos: data/real/videos            # vídeos grabados con la cámara del proyecto (no se suben a git)
+  images: data/real/images            # fotogramas: vXX_NNNNN.jpg (vídeo XX, fotograma NNNNN)
+  annotations: data/real/annotations  # un JSON por fotograma, en el formato común
+  frame_step: 15                      # una foto de cada 15 fotogramas (medio segundo a 30 fps)
+  min_sharpness: 0                    # descartar fotogramas movidos: varianza del Laplaciano mínima
+                                      # (0 = guardarlos todos; el valor depende de la cámara)
+  jpeg_quality: 95
+
+annotation:
+  sam_model: ArtificialVision/models/sam2.1_b.pt   # SAM 2.1 base; se descarga solo la primera vez
+  crop_px: 256                # SAM recibe un recorte de 256 x 256 px alrededor del clic, no la foto entera.
+                              # SAM amplía su entrada a 1024 px, así que el punto se ve 4 veces más grande.
+                              # Medido con 20 puntos y 20 números de una foto sintética a 2,7 px/mm: IoU >= 0,7
+                              # con la caja real en el 100 % de los puntos y el 95 % de los números (foto
+                              # entera: 90 % y 65 %)
+  max_box_px: {dot: 60, number: 160}   # una caja de SAM mayor que esto es un error (ha cogido la hoja, una
+                                       # sombra...): se descarta y hay que dibujar la caja arrastrando
 
 # -----------------------------------------------------------------------------
 # Emparejamiento y evaluación, comunes a los dos enfoques

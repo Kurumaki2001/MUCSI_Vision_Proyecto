@@ -13,6 +13,11 @@ ArtificialVision/yolo_dataset_quick/
 # El modelo final se copia a ArtificialVision/models/, que sí se puede subir.
 yolo26n.pt
 **/weights/
+# Pesos de SAM 2.1 para la herramienta de etiquetado (unos 160 MB; se descargan solos)
+sam2.1_*.pt
+
+# Vídeos originales de las fichas reales: pesan mucho. Sí se suben los fotogramas y sus anotaciones.
+data/real/videos/
 
 # Resultados de la prueba rápida (solo comprueban que todo funciona)
 ArtificialVision/results/training/*_quick/

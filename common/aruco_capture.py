@@ -70,8 +70,9 @@ def main():
     parser.add_argument("--cam", default="0", help="índice o ruta de la cámara (por defecto 0)")
     parser.add_argument("--list-cams", action="store_true", help="listar las cámaras disponibles y salir")
     parser.add_argument("--out", type=Path, default=project_path(cfg["captures"]), help="carpeta de salida")
-    parser.add_argument("--width", type=int, default=1280)
-    parser.add_argument("--height", type=int, default=960, help="1280x960: la resolución de la calibración actual")
+    parser.add_argument("--width", type=int, default=1920)
+    parser.add_argument("--height", type=int, default=1080,
+                        help="1920x1080: la resolución máxima de la cámara del proyecto (USB Camera, 16:9)")
     parser.add_argument("--interval", type=float, default=0, help="guardado automático cada N s (0 = no)")
     parser.add_argument("--count", type=int, default=0, help="parar tras N fotos (0 = sin límite)")
     parser.add_argument("--no-gui", action="store_true", help="sin ventana (necesita --interval)")

@@ -19,7 +19,7 @@ Pasos para cada foto (el tiempo de cada uno queda en el JSON):
        se quede con un número ajeno.
      En los dos modos se descartan las lecturas con poca confianza.
   5. Emparejamiento (common/matching.py) y diagnóstico de la secuencia 1..N.
-  6. Coordenadas reales (ArtificialVision/aruco_coords.py, si aruco.enabled). Se busca la hoja de
+  6. Coordenadas reales (common/aruco_coords.py, si aruco.enabled). Se busca la hoja de
      marcadores ArUco de clase y, con la homografía imagen -> hoja, cada punto recibe x_mm, y_mm.
      La detección de los marcadores se hace justo después de YOLO, para descartar lo que YOLO
      haya detectado dentro de un marcador (sus cuadrados negros pueden parecer puntos).
