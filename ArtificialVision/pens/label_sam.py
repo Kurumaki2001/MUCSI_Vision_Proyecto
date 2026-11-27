@@ -33,14 +33,48 @@ import argparse
 import glob
 import os
 import sys
+from pathlib import Path
 
 import cv2
 import numpy as np
-from ultralytics import SAM
+
+from ArtificialVision.pens.frames import FRAME_NAME, video_mapping
+from common.images import read_image
+from tools.extract_frames import MAPPING_FILE, read_mapping, write_mapping
 
 COLORES = [(170, 95, 0), (60, 170, 60), (40, 130, 230), (180, 60, 180), (30, 200, 220),
            (200, 200, 60), (90, 90, 200), (150, 150, 150), (60, 60, 60), (0, 0, 200)]
 EXTS = (".jpg", ".jpeg", ".png")
+
+
+def sync_video_mapping(fotos, origen, salida):
+    """Conserva el origen de las etiquetas para poder regenerar los fotogramas."""
+    frame_ids = {match[1].lower() for photo in fotos
+                 if (match := FRAME_NAME.fullmatch(Path(photo).with_suffix(".jpg").name))}
+    if not frame_ids:
+        return
+    frames_path, labels_path = Path(origen) / MAPPING_FILE, Path(salida) / MAPPING_FILE
+    if not frames_path.exists() and not labels_path.exists():
+        return  # Fotos antiguas o directas sin mapas de vídeo.
+    if frames_path.resolve() == labels_path.resolve():
+        raise ValueError("Indica una carpeta de etiquetas distinta de la de fotogramas con --out.")
+
+    frames, labels = read_mapping(frames_path), read_mapping(labels_path)
+    missing = sorted(frame_ids - set(frames.values()))
+    if missing:
+        raise ValueError(f"No se conoce el vídeo de {', '.join(missing)} en {frames_path}.")
+    unmapped_ids = frame_ids - set(labels.values())
+    for path in Path(salida).glob("*.txt"):
+        match = FRAME_NAME.fullmatch(path.with_suffix(".jpg").name)
+        if match and path.is_file() and match[1].lower() in unmapped_ids:
+            raise ValueError(f"No se conoce el vídeo de la etiqueta {path}. "
+                             "Recupera su mapa original o indica otra carpeta de salida con --out.")
+
+    selected = {name: video_id for name, video_id in frames.items() if video_id in frame_ids}
+    mapping = video_mapping(labels, selected)
+    if mapping != labels:
+        labels_path.parent.mkdir(parents=True, exist_ok=True)
+        write_mapping(labels_path, mapping)
 
 
 def leer_etiquetas(ruta, w, h):
@@ -65,6 +99,8 @@ def escribir_etiquetas(ruta, cajas, w, h):
 
 class Etiquetador:
     def __init__(self, fotos, salida, clases, modelo, ancho_max):
+        from ultralytics import SAM
+
         self.fotos, self.salida, self.clases = fotos, salida, clases
         self.sam = SAM(modelo)
         self.ancho_max = ancho_max
@@ -74,7 +110,7 @@ class Etiquetador:
     # ---------- foto actual ----------
     def abrir(self, i):
         self.i = i
-        self.img = cv2.imread(self.fotos[i])
+        self.img = read_image(self.fotos[i])
         self.h, self.w = self.img.shape[:2]
         self.escala, self.dx, self.dy = 1.0, 0, 0  # se recalculan al dibujar, según el tamaño de la ventana
         self.txt = os.path.join(self.salida, os.path.splitext(os.path.basename(self.fotos[i]))[0] + ".txt")
@@ -242,9 +278,13 @@ def main():
     p.add_argument("--desde", type=int, default=1, help="empezar en la foto número N")
     args = p.parse_args()
 
-    fotos = sorted(f for f in glob.glob(os.path.join(args.fotos, "*")) if f.lower().endswith(EXTS))
+    fotos = sorted(f for f in glob.glob(os.path.join(args.fotos, "*")) if os.path.isfile(f) and f.lower().endswith(EXTS))
     if not fotos:
         sys.exit(f"No hay fotos .jpg/.png en {args.fotos}. Sácalas antes con python -m ArtificialVision.pens.frames")
+    try:
+        sync_video_mapping(fotos, args.fotos, args.out)
+    except ValueError as error:
+        p.error(str(error))
     os.makedirs(args.out, exist_ok=True)
     clases = list(cfg["classes"])
     with open(os.path.join(args.out, "clases.txt"), "w", encoding="utf-8") as f:

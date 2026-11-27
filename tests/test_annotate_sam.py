@@ -1,9 +1,10 @@
 """Tests de la herramienta de etiquetado con SAM (sin abrir ventanas ni cargar SAM)."""
 
+import cv2
 import pytest
 
 from common import json_format
-from tools.annotate_sam import LabelState, View, crop_window, plausible_box, polygon_box
+from tools.annotate_sam import LabelState, SamAnnotator, View, crop_window, plausible_box, polygon_box
 
 
 # ---------- geometría ----------
@@ -23,6 +24,15 @@ def test_zoom_keeps_the_point_under_the_mouse():
     assert view.to_image(300.5, 200.5) == pytest.approx(before)
     view.zoom_at(300.5, 200.5, 0.01)                         # no se puede alejar más que la foto entera
     assert view.zoom == 1.0
+
+
+def test_mouse_wheel_uses_signed_delta_in_event_flags():
+    annotator = SamAnnotator.__new__(SamAnnotator)
+    annotator.view = View(800, 600, window=(400, 300))
+    shift = cv2.EVENT_FLAG_SHIFTKEY
+    for delta, expected in [(120, 1.25), (0, 1.25), (-120, 1.0)]:
+        annotator.on_mouse(cv2.EVENT_MOUSEWHEEL, 100, 100, (delta << 16) | shift, None)
+        assert annotator.view.zoom == pytest.approx(expected)
 
 
 def test_warp_matrix_matches_to_window():

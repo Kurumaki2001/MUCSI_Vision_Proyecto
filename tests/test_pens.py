@@ -6,14 +6,18 @@ y se usan sus cajas verdaderas en lugar de las de YOLO.
 """
 
 import sys
+from types import SimpleNamespace
 
 import cv2
 import numpy as np
 import pytest
 
 from ArtificialVision.pens.analysis import pen_color, pen_geometry, segment_grabcut
-from ArtificialVision.pens.pipeline import analyse
+from ArtificialVision.pens.label_sam import Etiquetador, sync_video_mapping
+from ArtificialVision.pens.pipeline import PenPipeline, analyse, draw_pens
 from common.config import load_config
+from common.images import write_image
+from tools.extract_frames import read_mapping, write_mapping
 
 CFG = load_config()["pens"]
 INKS = {"rojo": (40, 40, 200), "azul": (190, 90, 20), "negro": (25, 25, 25)}  # BGR
@@ -84,13 +88,45 @@ def test_grabcut_recovers_the_pen_from_its_box(scene):
         assert iou > 0.85, f"{name}: IoU {iou:.2f}"
 
 
+def test_grabcut_without_background_returns_no_object():
+    image = np.full((30, 40, 3), 100, np.uint8)
+    mask = segment_grabcut(image, [0, 0, 40, 30])
+    assert mask.shape == (30, 40) and not mask.any()
+
+
+@pytest.mark.parametrize("missing_masks", [None, SimpleNamespace(data=[])])
+def test_sam_missing_mask_keeps_next_detection_aligned(scene, missing_masks):
+    image, _, truth = scene
+    boxes = [box_of(truth["rojo"]), box_of(truth["azul"])]
+    confidences = [0.6, 0.9]
+    pixels = SimpleNamespace(cpu=lambda: SimpleNamespace(numpy=lambda: truth["azul"] > 0))
+    replies = [missing_masks, SimpleNamespace(data=[pixels])]
+    calls = []
+
+    def sam(image, *, bboxes, verbose):
+        calls.append(bboxes)
+        return [SimpleNamespace(masks=replies[len(calls) - 1])]
+
+    pipeline = PenPipeline.__new__(PenPipeline)
+    pipeline.sam = sam
+    masks = pipeline.segment(image, boxes)
+    assert calls == [[boxes[0]], [boxes[1]]]
+    assert masks[0] is None and np.array_equal(masks[1], truth["azul"])
+
+    result = analyse(image, "escena", boxes, confidences, masks, None, CFG)
+    assert len(result["pens"]) == 1
+    pen = result["pens"][0]
+    assert (pen["id"], pen["box"], pen["confidence"], pen["color"]) == (1, boxes[1], 0.9, "azul")
+    assert draw_pens(image, result, masks).shape == image.shape
+
+
 def test_analyse_gives_millimetres_and_the_angle_on_the_table(scene):
     image, pens, masks = scene
     names = [name for name, _, _ in pens]
     boxes, conf, mask_list = [box_of(masks[n]) for n in names], [0.9] * 3, [masks[n] for n in names]
     # Hoja ArUco simulada: 4 px = 1 mm, sin giro ni perspectiva
     reference = {"found": True, "ids": [0, 1, 2, 3], "lens": None, "shape": image.shape[:2], "rms_mm": 0.1,
-                 "homography": np.diag([0.25, 0.25, 1.0])}
+                 "max_mm": 0.2, "homography": np.diag([0.25, 0.25, 1.0])}
     result = analyse(image, "escena", boxes, conf, mask_list, reference, CFG)
     for pen, (name, center, angle) in zip(result["pens"], pens):
         assert pen["color"] == name
@@ -98,6 +134,89 @@ def test_analyse_gives_millimetres_and_the_angle_on_the_table(scene):
         assert min(abs(pen["angle_deg"] - angle), 180 - abs(pen["angle_deg"] - angle)) < 2
         assert pen["length_mm"] == pytest.approx(75, abs=2)
     assert result["aruco"]["found"]
+
+
+@pytest.mark.parametrize("found", [False, True])
+def test_pen_cli_replaces_previous_csv_only_with_valid_reference(tmp_path, monkeypatch, found):
+    from ArtificialVision.pens import pipeline
+
+    photo = tmp_path / "mesa.png"
+    write_image(photo, np.zeros((50, 60, 3), np.uint8))
+    output = tmp_path / "salida"
+    output.mkdir()
+    csv = output / "mesa_rotuladores_mm.csv"
+    csv.write_text("coordenadas anteriores", encoding="utf-8")
+
+    def process(image, image_name):
+        assert not csv.exists()
+        return {"pens": [], "aruco": {"found": found, "markers": [0, 1] if found else [], "rms_mm": 0.2},
+                "times_ms": {"total": 1}}, []
+
+    monkeypatch.setattr(pipeline, "PenPipeline", lambda *args: SimpleNamespace(process=process, last_reference=None))
+    monkeypatch.setattr(sys, "argv", ["pipeline", str(photo), "--output", str(output)])
+    pipeline.main()
+
+    assert csv.exists() == found
+    if found:
+        assert csv.read_text(encoding="utf-8") == "color,x_mm,y_mm,angulo_deg,largo_mm\n"
+
+
+def test_pen_labeler_opens_non_ascii_paths(tmp_path, monkeypatch):
+    photo = tmp_path / "Visión.png"
+    expected = np.full((30, 40, 3), [40, 80, 120], np.uint8)
+    write_image(photo, expected)
+
+    def legacy_reader(*args):
+        pytest.fail("cv2.imread puede fallar con caracteres no ASCII en Windows")
+
+    monkeypatch.setattr(cv2, "imread", legacy_reader)
+    labeler = Etiquetador.__new__(Etiquetador)
+    labeler.fotos = [str(photo)]
+    labeler.salida = str(tmp_path)
+    labeler.abrir(0)
+    assert np.array_equal(labeler.img, expected)
+    assert (labeler.h, labeler.w) == (30, 40)
+
+
+def test_pen_labeler_persists_the_origin_of_new_labels(tmp_path):
+    frames, labels = tmp_path / "frames", tmp_path / "labels"
+    frames.mkdir()
+    labels.mkdir()
+    write_mapping(frames / "videos.txt", {"foto.mp4": "v06", "sin_fotogramas.mp4": "v07"})
+    write_mapping(labels / "videos.txt", {"anterior.mp4": "v01"})
+
+    sync_video_mapping([frames / "v06_00000.jpg"], frames, labels)
+
+    assert read_mapping(labels / "videos.txt") == {"anterior.mp4": "v01", "foto.mp4": "v06"}
+
+
+@pytest.mark.parametrize("has_previous_mapping", [False, True])
+def test_pen_labeler_refuses_conflicting_or_unmapped_existing_labels(tmp_path, has_previous_mapping):
+    frames, labels = tmp_path / "frames", tmp_path / "labels"
+    frames.mkdir()
+    labels.mkdir()
+    write_mapping(frames / "videos.txt", {"nuevo.mp4": "v06"})
+    (labels / "v06_00000.txt").touch()
+    original = {"anterior.mp4": "v06"} if has_previous_mapping else {}
+    if has_previous_mapping:
+        write_mapping(labels / "videos.txt", original)
+
+    message = "Los mapas de vídeos no coinciden" if has_previous_mapping else "No se conoce el vídeo de la etiqueta"
+    with pytest.raises(ValueError, match=message):
+        sync_video_mapping([frames / "v06_00000.jpg"], frames, labels)
+
+    assert read_mapping(labels / "videos.txt") == original
+
+
+def test_pen_labeler_accepts_legacy_photos_when_neither_map_exists(tmp_path):
+    frames, labels = tmp_path / "frames", tmp_path / "labels"
+    frames.mkdir()
+    labels.mkdir()
+    (labels / "v06_00000.txt").touch()
+
+    sync_video_mapping([frames / "v06_00000.jpg"], frames, labels)
+
+    assert not (labels / "videos.txt").exists()
 
 
 def test_frames_numbers_videos_and_saves_every_nth_frame(tmp_path, monkeypatch):
@@ -108,7 +227,11 @@ def test_frames_numbers_videos_and_saves_every_nth_frame(tmp_path, monkeypatch):
         writer.write(np.full((48, 64, 3), i * 10, np.uint8))
     writer.release()
     out = tmp_path / "frames"
-    monkeypatch.setattr(sys, "argv", ["frames", str(tmp_path), "--every", "5", "--out", str(out)])
+    config = load_config()
+    config["pens"]["labels"] = str(tmp_path / "labels")
+    monkeypatch.setattr(frames, "load_config", lambda: config)
+    monkeypatch.setattr(sys, "argv", ["frames", str(tmp_path), "--every", "5", "--min-sharpness", "0",
+                                      "--out", str(out)])
     frames.main()
     assert sorted(p.name for p in out.glob("*.jpg")) == [f"v01_{i:05d}.jpg" for i in (0, 5, 10, 15)]
     assert "v01\trotuladores_1.avi" in (out / "videos.txt").read_text(encoding="utf-8")

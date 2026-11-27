@@ -19,9 +19,9 @@ from pathlib import Path
 
 import cv2
 
-from common.aruco_coords import load_sheet, make_detector
+from common.aruco_coords import IMAGE_EXTENSIONS, load_sheet, make_detector
 from common.config import load_config, project_path
-from common.images import write_image
+from common.images import read_image, write_image
 
 
 def backends():
@@ -64,6 +64,17 @@ def list_cameras(max_index=6):
         print("  no se ha encontrado ninguna cámara")
 
 
+def check_capture_resolution(folder, shape):
+    """Comprueba que la resolución de la cámara coincide con las fotos de la carpeta."""
+    height, width = shape
+    for path in sorted(folder.iterdir()):
+        if path.suffix.lower() in IMAGE_EXTENSIONS and path.is_file():
+            old_height, old_width = read_image(path).shape[:2]
+            if (old_height, old_width) != shape:
+                raise SystemExit(f"La cámara está a {width}x{height} y {path.name} está a "
+                                 f"{old_width}x{old_height}. Indica otra carpeta con --out.")
+
+
 def main():
     cfg = load_config()["aruco"]
     parser = argparse.ArgumentParser(description="Guarda fotos de la hoja de ArUco para calibrar la lente.")
@@ -93,6 +104,7 @@ def main():
     # El detector solo informa en la previsualización: en la foto guardada no se dibuja nada
     detector = make_detector(load_sheet(project_path(cfg["sheet"]))["dictionary"])
     saved, auto, last = 0, args.interval > 0, 0.0
+    shape = None
 
     def save(frame):
         nonlocal saved
@@ -108,6 +120,9 @@ def main():
             if not ok:
                 time.sleep(0.05)
                 continue
+            if frame.shape[:2] != shape:
+                shape = frame.shape[:2]
+                check_capture_resolution(args.out, shape)
             now = time.time()
             if auto and now - last >= args.interval:
                 save(frame)
@@ -138,7 +153,8 @@ def main():
         pass
     finally:
         capture.release()
-        cv2.destroyAllWindows()
+        if not args.no_gui:
+            cv2.destroyAllWindows()
         print(f"Total guardadas: {saved}")
 
 

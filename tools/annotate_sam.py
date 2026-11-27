@@ -546,7 +546,10 @@ class SamAnnotator:
         elif event == cv2.EVENT_MBUTTONUP:
             self.pan_from = None
         elif event == cv2.EVENT_MOUSEWHEEL:
-            self.view.zoom_at(wx, wy, 1.25 if cv2.getMouseWheelDelta(flags) > 0 else 0.8)
+            # HighGUI guarda el desplazamiento con signo en los 16 bits altos de flags.
+            delta = (flags >> 16) & 0xFFFF
+            if delta:
+                self.view.zoom_at(wx, wy, 1.25 if delta < 0x8000 else 0.8)
 
     def on_key(self, key):
         """Devuelve False para salir."""

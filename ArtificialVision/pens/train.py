@@ -3,7 +3,7 @@
 Flujo completo, desde la carpeta del proyecto:
     1. Grabar vídeos de los rotuladores sobre la mesa (Documentacion_Rotuladores/video.md) y
        dejarlos en data/pens/videos/
-    2. python -m ArtificialVision.pens.frames --every 30            # fotos de los vídeos
+    2. python -m ArtificialVision.pens.frames                       # paso 20 y nitidez 30 para las etiquetas existentes
     3. python -m ArtificialVision.pens.label_sam                     # etiquetar con SAM (clics)
     4. python -m ArtificialVision.pens.prepare_dataset              # train/val separados por vídeo
     5. python -m ArtificialVision.pens.train                         # este script

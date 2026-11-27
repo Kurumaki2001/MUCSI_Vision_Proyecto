@@ -37,16 +37,21 @@ def segment_grabcut(image, box, iterations=5, margin=0.1):
     rectángulo de inicialización es la caja de YOLO dentro de ese recorte.
     """
     height, width = image.shape[:2]
+    full = np.zeros((height, width), np.uint8)
     x0, y0, x1, y1 = box
+    x0, y0, x1, y1 = max(0, x0), max(0, y0), min(width, x1), min(height, y1)
+    if x1 <= x0 or y1 <= y0:
+        return full
     pad_x, pad_y = margin * (x1 - x0) + 5, margin * (y1 - y0) + 5
     cx0, cy0 = int(max(0, x0 - pad_x)), int(max(0, y0 - pad_y))
     cx1, cy1 = int(min(width, x1 + pad_x)), int(min(height, y1 + pad_y))
     crop = np.ascontiguousarray(image[cy0:cy1, cx0:cx1])
     rect = (int(x0 - cx0), int(y0 - cy0), max(1, int(x1 - x0)), max(1, int(y1 - y0)))
+    if rect == (0, 0, crop.shape[1], crop.shape[0]):
+        return full  # GrabCut necesita píxeles de fondo fuera de la caja.
     mask = np.zeros(crop.shape[:2], np.uint8)
     background, foreground = np.zeros((1, 65), np.float64), np.zeros((1, 65), np.float64)
     cv2.grabCut(crop, mask, rect, background, foreground, iterations, cv2.GC_INIT_WITH_RECT)
-    full = np.zeros((height, width), np.uint8)
     # 1 = primer plano seguro, 3 = primer plano probable (igual que en el ejercicio de clase)
     full[cy0:cy1, cx0:cx1] = np.where((mask == cv2.GC_FGD) | (mask == cv2.GC_PR_FGD), 255, 0).astype(np.uint8)
     return largest_blob(full)

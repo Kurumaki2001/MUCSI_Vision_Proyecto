@@ -13,7 +13,7 @@ Pasos para cada foto (el tiempo de cada uno queda en el JSON):
 Salida por foto, en la carpeta de salida:
   <nombre>_rotuladores.json  todos los datos (píxeles, mm, fracciones de color, tiempos)
   <nombre>_rotuladores.jpg   dibujo: silueta, rectángulo, eje y color de cada rotulador
-  <nombre>_rotuladores_mm.csv  color, x_mm, y_mm, angulo_deg, largo_mm (si se encuentra la hoja ArUco)
+  <nombre>_rotuladores_mm.csv  color, x_mm, y_mm, angulo_deg, largo_mm (con referencia ArUco válida)
 
 Uso, desde la carpeta del proyecto:
     python -m ArtificialVision.pens.pipeline foto.jpg
@@ -29,9 +29,10 @@ import cv2
 import numpy as np
 
 from ArtificialVision.pens.analysis import largest_blob, pen_color, pen_geometry, segment_grabcut
-from common.aruco_coords import ArucoReference, draw_reference, to_mm
+from common.aruco_coords import (ArucoReference, aruco_metadata, describe_aruco, draw_reference, to_mm,
+                                 write_robot_csv)
 from common.config import load_config, project_path
-from common.images import read_image, write_image
+from common.images import check_unique_image_stems, read_image, write_image
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp"}
 DRAW_COLORS = {"azul": (230, 120, 0), "rojo": (40, 40, 230), "negro": (30, 30, 30), "desconocido": (0, 200, 255)}
@@ -67,15 +68,18 @@ class PenPipeline:
         return result.boxes.xyxy.cpu().numpy().tolist(), result.boxes.conf.cpu().numpy().tolist()
 
     def segment(self, image, boxes):
-        """Una máscara (uint8 0/255, tamaño de la foto) por caja, con SAM o con GrabCut."""
-        if not boxes:
-            return []
+        """Una máscara (uint8 0/255, tamaño de la foto) o None por cada caja de YOLO."""
         if self.sam is None:
             return [segment_grabcut(image, box) for box in boxes]
-        result = self.sam(image, bboxes=boxes, verbose=False)[0]
         height, width = image.shape[:2]
         masks = []
-        for data in result.masks.data.cpu().numpy():
+        for box in boxes:
+            # SAM puede descartar una máscara. Una consulta por caja conserva el índice de YOLO.
+            result = self.sam(image, bboxes=[box], verbose=False)[0]
+            if result.masks is None or len(result.masks.data) == 0:
+                masks.append(None)
+                continue
+            data = result.masks.data[0].cpu().numpy()
             mask = (data > 0.5).astype(np.uint8) * 255
             if mask.shape != (height, width):  # por si SAM devuelve otra resolución
                 mask = cv2.resize(mask, (width, height), interpolation=cv2.INTER_NEAREST)
@@ -113,7 +117,7 @@ def analyse(image, image_name, boxes, confidences, masks, reference, cfg):
     found = reference is not None and reference["found"]
     pens = []
     for i, (box, confidence, mask) in enumerate(zip(boxes, confidences, masks)):
-        geometry = pen_geometry(mask)
+        geometry = pen_geometry(mask) if mask is not None else None
         if geometry is None:
             continue
         color, fractions = pen_color(image, mask, cfg["color"])
@@ -135,13 +139,11 @@ def analyse(image, image_name, boxes, confidences, masks, reference, cfg):
                        length_mm=round(float(np.linalg.norm(axis)), 1))
         pens.append(pen)
     height, width = image.shape[:2]
-    aruco = None
-    if reference is not None:
-        aruco = {"found": found, "markers": reference["ids"], "lens_correction": reference["lens"] is not None}
-        if found:
-            aruco.update(rms_mm=round(reference["rms_mm"], 3), units="mm",
-                         frame="hoja ArUco: origen en su esquina superior izquierda, X a la derecha, Y hacia "
-                               "abajo; angle_deg desde el eje X hacia el Y, de 0 a 180")
+    aruco = aruco_metadata(reference) if reference is not None else None
+    if found:
+        aruco.update(units="mm",
+                     frame="hoja ArUco: origen en su esquina superior izquierda, X a la derecha, Y hacia "
+                           "abajo; angle_deg desde el eje X hacia el Y, de 0 a 180")
     return {"image": image_name, "width": width, "height": height, "pens": pens, "aruco": aruco}
 
 
@@ -176,7 +178,7 @@ def save_csv(result, path):
     lines = ["color,x_mm,y_mm,angulo_deg,largo_mm"]
     lines += [f"{p['color']},{p['center_mm'][0]},{p['center_mm'][1]},{p['angle_deg']},{p['length_mm']}"
               for p in result["pens"] if "center_mm" in p]
-    Path(path).write_text("\n".join(lines) + "\n", encoding="utf-8")
+    write_robot_csv(lines, path)
 
 
 def main():
@@ -192,24 +194,29 @@ def main():
         p for p in args.source.iterdir() if p.suffix.lower() in IMAGE_EXTENSIONS)
     if not images:
         raise SystemExit(f"No hay fotos en {args.source}.")
+    check_unique_image_stems(images)
     output.mkdir(parents=True, exist_ok=True)
 
     pipeline = PenPipeline(config, args.segmenter)
     for i, path in enumerate(images, start=1):
+        stem = output / f"{path.stem}_rotuladores"
+        csv_path = Path(f"{stem}_mm.csv")
+        csv_path.unlink(missing_ok=True)
         image = read_image(path)
         result, masks = pipeline.process(image, path.name)
-        stem = output / f"{path.stem}_rotuladores"
         Path(f"{stem}.json").write_text(json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
         drawing = draw_pens(image, result, masks)
         if pipeline.last_reference is not None:
             draw_reference(drawing, pipeline.last_reference)
         write_image(f"{stem}.jpg", drawing, 90)
-        if result["aruco"] and result["aruco"]["found"]:
-            save_csv(result, f"{stem}_mm.csv")
+        aruco = result["aruco"]
+        if aruco and aruco["found"]:
+            save_csv(result, csv_path)
         summary = ", ".join(p["color"] + (f" ({p['center_mm'][0]:.0f}, {p['center_mm'][1]:.0f}) mm"
                                           if "center_mm" in p else "") for p in result["pens"])
+        aruco_summary = f" | {describe_aruco(aruco)}" if aruco else ""
         print(f"[{i}/{len(images)}] {path.name}: {len(result['pens'])} rotuladores: {summary or '-'} "
-              f"({result['times_ms']['total']:.0f} ms)")
+              f"({result['times_ms']['total']:.0f} ms){aruco_summary}")
     print(f"Resultados en {output}")
 
 

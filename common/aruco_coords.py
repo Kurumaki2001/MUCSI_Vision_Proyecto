@@ -21,8 +21,8 @@ Pasos (ArucoReference.locate):
   4. Homografía imagen -> hoja (mm) por mínimos cuadrados con todas las esquinas visibles. Con
      un solo marcador también se podría (4 esquinas), pero se extrapolaría mucho: por eso se
      piden al menos min_markers.
-  5. Calidad: error (RMS y máximo, en mm) entre las esquinas detectadas pasadas a mm y sus
-     posiciones reales.
+  5. Calidad: error (RMS y máximo, en mm) entre las esquinas proyectadas y sus posiciones
+     reales. Una referencia ambigua o con un ajuste fuera de tolerancia se rechaza.
 
 Sistema de coordenadas resultante (el del JSON de la hoja): origen en la esquina superior
 izquierda de la hoja de ArUco, X hacia la derecha, Y hacia abajo, en milímetros. Pasarlo al
@@ -39,13 +39,15 @@ aruco_calibrate.py.
 
 import argparse
 import json
+from collections import Counter
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 import cv2
 import numpy as np
 
 from common.config import load_config, project_path
-from common.images import read_image, write_image
+from common.images import check_unique_image_stems, read_image, write_image
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp"}
 MAGENTA = (255, 0, 255)
@@ -202,16 +204,34 @@ def to_mm(points_px, homography, lens=None, shape=None):
 def fit_homography(detected, sheet_corners):
     """Homografía imagen -> hoja (mm) por mínimos cuadrados con las esquinas de varios marcadores.
 
-    detected: {id: (4, 2) esquinas en px, ya sin distorsión}. Devuelve (H, rms_mm, max_mm).
+    detected: {id: (4, 2) esquinas en px, ya sin distorsión}. Devuelve (H, rms_mm, max_mm),
+    con None en los tres campos si el ajuste no es válido.
     Método 0 de findHomography = mínimos cuadrados con todos los puntos (sin RANSAC): las
     esquinas ya son fiables y así cada una aporta lo mismo.
     """
     ids = sorted(detected)
+    if not ids:
+        return None, None, None
     src = np.concatenate([detected[i] for i in ids])
     dst = np.concatenate([sheet_corners[i] for i in ids])
-    homography, _ = cv2.findHomography(src, dst, 0)
-    errors = np.linalg.norm(cv2.perspectiveTransform(src.reshape(-1, 1, 2), homography).reshape(-1, 2) - dst, axis=1)
-    return homography, float(np.sqrt(np.mean(errors ** 2))), float(errors.max())
+    if not (np.isfinite(src).all() and np.isfinite(dst).all()):
+        return None, None, None
+    try:
+        homography, _ = cv2.findHomography(src, dst, 0)
+        if homography is None or not np.isfinite(homography).all() or np.linalg.matrix_rank(homography) < 3:
+            return None, None, None
+        projected = to_mm(src, homography)
+    except (cv2.error, np.linalg.LinAlgError):
+        return None, None, None
+    errors = np.linalg.norm(projected - dst, axis=1)
+    rms = float(np.sqrt(np.mean(errors ** 2)))
+    return (homography, rms, float(errors.max())) if np.isfinite(rms) else (None, None, None)
+
+
+def duplicate_sheet_ids(marker_ids, sheet_ids):
+    """Devuelve los IDs repetidos que pertenecen a la hoja de referencia."""
+    counts = Counter(marker_id for marker_id in marker_ids if marker_id in sheet_ids)
+    return sorted(marker_id for marker_id, count in counts.items() if count > 1)
 
 
 class ArucoReference:
@@ -241,7 +261,7 @@ class ArucoReference:
             marker_id, quad = int(marker_id), quad.reshape(4, 2).astype(np.float64)
             all_markers.append((marker_id, quad))
             if marker_id not in self.sheet["corners"] or marker_id in sheet_markers:
-                continue  # otro diccionario/ID, o el mismo ID repetido: no se usa para medir
+                continue  # el segundo ejemplar queda en all_markers para detectar la ambigüedad
             if self.cfg.get("refine_edges", True):
                 refined = edge_refine(smooth, quad, offset)
                 quad = refined if refined is not None else quad   # si el refinado falla, esquinas de OpenCV
@@ -253,18 +273,33 @@ class ArucoReference:
 
         found (bool), ids usados, markers {id: esquinas px}, all_markers (todos los detectados, para
         no confundirlos con puntos), homography (3x3, px sin distorsión -> mm), lens (o None),
-        shape, rms_mm y max_mm (error en las esquinas de los marcadores).
+        shape, rms_mm y max_mm (error en las esquinas de los marcadores). Si se rechaza la
+        referencia, reason explica por qué y homography es None.
         """
         shape = image.shape[:2]
         markers, all_markers = self.detect_markers(image)
         lens = self.lens if self.lens is not None and self.lens.fits(shape) else None
         reference = {"found": False, "ids": sorted(markers), "markers": markers, "all_markers": all_markers,
                      "homography": None, "lens": lens, "shape": shape, "rms_mm": None, "max_mm": None}
-        if len(markers) < self.cfg.get("min_markers", 2):
+        duplicate_ids = duplicate_sheet_ids((i for i, _ in all_markers), self.sheet["corners"])
+        if duplicate_ids:
+            reference.update(reason="duplicate_markers", duplicate_ids=duplicate_ids)
+            return reference
+        min_markers = self.cfg.get("min_markers", 2)
+        if len(markers) < min_markers:
+            reference.update(reason="insufficient_markers", min_markers=min_markers)
             return reference
         undistorted = {i: lens.undistort(q, shape) if lens else q for i, q in markers.items()}
         homography, rms, worst = fit_homography(undistorted, self.sheet["corners"])
-        reference.update(found=True, homography=homography, rms_mm=rms, max_mm=worst)
+        if homography is None:
+            reference["reason"] = "invalid_homography"
+            return reference
+        reference.update(rms_mm=rms, max_mm=worst)
+        max_rms = self.cfg.get("max_rms_mm", 1.0)
+        if max_rms is not None and rms > max_rms:
+            reference.update(reason="high_rms", max_rms_mm=max_rms)
+            return reference
+        reference.update(found=True, homography=homography)
         return reference
 
 
@@ -285,14 +320,45 @@ def inside_markers(x, y, all_markers, margin):
     return False
 
 
+def aruco_metadata(reference):
+    """Extrae el estado y los diagnósticos de ArUco que se guardan en JSON."""
+    summary = {"found": reference["found"], "markers": reference["ids"],
+               "lens_correction": reference["lens"] is not None}
+    for key in ("rms_mm", "max_mm"):
+        if reference.get(key) is not None:
+            summary[key] = round(reference[key], 3)
+    for key in ("reason", "duplicate_ids", "min_markers", "max_rms_mm"):
+        if key in reference:
+            summary[key] = reference[key]
+    return summary
+
+
+def describe_aruco(summary):
+    """Resume el ajuste o indica por qué se omitieron las coordenadas en milímetros."""
+    markers = summary["markers"]
+    if summary["found"]:
+        return f"ArUco {markers}: error {summary['rms_mm']:.2f} mm"
+    reason = summary.get("reason")
+    if reason == "duplicate_markers":
+        detail = f"IDs duplicados {summary['duplicate_ids']}"
+    elif reason == "high_rms":
+        detail = f"error de ajuste {summary['rms_mm']:.2f} mm (límite {summary['max_rms_mm']:g} mm)"
+    elif reason == "invalid_homography":
+        detail = "homografía no válida"
+    elif reason == "insufficient_markers":
+        detail = f"se necesitan al menos {summary['min_markers']} marcadores"
+    else:
+        detail = "hoja no encontrada"
+    return f"ArUco {markers}: {detail}, sin coordenadas en mm"
+
+
 def add_mm_coordinates(result, reference):
     """Añade x_mm, y_mm a cada punto del resultado y devuelve el resumen para metadata["aruco"].
 
     El resumen incluye "path_mm": los puntos emparejados con un número leído, ordenados por ese
     número, que es la lista de destinos que necesitará el robot.
     """
-    summary = {"found": reference["found"], "markers": reference["ids"],
-               "lens_correction": reference["lens"] is not None}
+    summary = aruco_metadata(reference)
     if not reference["found"]:
         return summary
     dots = result["dots"]
@@ -306,7 +372,6 @@ def add_mm_coordinates(result, reference):
     path = sorted((values[pair["number"]], pair["dot"]) for pair in result["pairs"]
                   if values.get(pair["number"]) is not None)
     summary.update(units="mm", frame="hoja ArUco: origen en su esquina superior izquierda, X a la derecha, Y hacia abajo",
-                   rms_mm=round(reference["rms_mm"], 3), max_mm=round(reference["max_mm"], 3),
                    path_mm=[{"value": value, "dot": dot_id, "x_mm": by_id[dot_id]["x_mm"], "y_mm": by_id[dot_id]["y_mm"]}
                             for value, dot_id in path])
     return summary
@@ -315,7 +380,20 @@ def add_mm_coordinates(result, reference):
 def save_path_csv(summary, path):
     """Guarda la lista de destinos (número, x_mm, y_mm) en un CSV fácil de pasar al robot."""
     lines = ["value,x_mm,y_mm"] + [f"{p['value']},{p['x_mm']},{p['y_mm']}" for p in summary.get("path_mm", [])]
-    Path(path).write_text("\n".join(lines) + "\n", encoding="utf-8")
+    write_robot_csv(lines, path)
+
+
+def write_robot_csv(lines, path):
+    """Publica un CSV completo para que el robot no pueda leer una escritura a medias."""
+    path = Path(path)
+    file = NamedTemporaryFile(dir=path.parent, mode="w", encoding="utf-8", delete=False)
+    temporary = Path(file.name)
+    try:
+        with file:
+            file.write("\n".join(lines) + "\n")
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def draw_reference(image, reference, axis_mm=50):
@@ -348,18 +426,21 @@ def leave_one_out(reference_finder, image):
     Devuelve {id: error en mm}.
     """
     shape = image.shape[:2]
-    markers, _ = reference_finder.detect_markers(image)
+    markers, all_markers = reference_finder.detect_markers(image)
+    sheet = reference_finder.sheet["corners"]
+    if duplicate_sheet_ids((i for i, _ in all_markers), sheet):
+        return {}
     lens = reference_finder.lens if reference_finder.lens is not None and reference_finder.lens.fits(shape) else None
     undistorted = {i: lens.undistort(q, shape) if lens else q for i, q in markers.items()}
-    sheet = reference_finder.sheet["corners"]
     errors = {}
     if len(undistorted) < 3:
         return errors
     for left_out in undistorted:
         others = {i: q for i, q in undistorted.items() if i != left_out}
         homography, _, _ = fit_homography(others, sheet)
-        predicted = cv2.perspectiveTransform(undistorted[left_out].reshape(-1, 1, 2), homography).reshape(-1, 2).mean(0)
-        errors[left_out] = float(np.linalg.norm(predicted - sheet[left_out].mean(0)))
+        if homography is not None:
+            predicted = to_mm(undistorted[left_out], homography).mean(0)
+            errors[left_out] = float(np.linalg.norm(predicted - sheet[left_out].mean(0)))
     return errors
 
 
@@ -381,18 +462,17 @@ def main():
     images = [args.source] if args.source.is_file() else sorted(
         p for p in args.source.iterdir() if p.suffix.lower() in IMAGE_EXTENSIONS)
     if args.output:
+        check_unique_image_stems(images)
         args.output.mkdir(parents=True, exist_ok=True)
 
     all_errors = []
     for path in images:
         image = read_image(path)
         reference = finder.locate(image)
-        text = f"{path.name}: marcadores {reference['ids']}"
+        text = f"{path.name}: {describe_aruco(aruco_metadata(reference))}"
         if reference["found"]:
-            text += f", error en las esquinas {reference['rms_mm']:.2f} mm (máx. {reference['max_mm']:.2f})"
+            text += f", máximo {reference['max_mm']:.2f} mm"
             text += ", con corrección de lente" if reference["lens"] else ", sin corrección de lente"
-        else:
-            text += f" -> no hay bastantes (mínimo {cfg.get('min_markers', 2)})"
         if args.validate:
             errors = leave_one_out(finder, image)
             all_errors += list(errors.values())

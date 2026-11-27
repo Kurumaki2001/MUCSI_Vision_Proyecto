@@ -139,7 +139,7 @@ inference:
 #
 # Se usa la hoja de calibración de clase: A4 con 4 marcadores DICT_4X4_50,
 # IDs 0-3, de 80 mm. Debe estar en el MISMO plano que la ficha de puntos (encima de la mesa).
-# Si se encuentra, cada punto del JSON lleva también x_mm, y_mm (origen en la esquina superior
+# Si la referencia es válida, cada punto del JSON lleva también x_mm, y_mm (origen en la esquina superior
 # izquierda de la hoja de ArUco, X a la derecha, Y hacia abajo) y se guarda <foto>_mm.csv.
 # -----------------------------------------------------------------------------
 aruco:
@@ -157,7 +157,7 @@ aruco:
   captures: aruco_sheet/captures   # fotos de la hoja para recalibrar la lente
                               # (python -m common.aruco_capture y luego aruco_calibrate)
   exclusion_margin: 0.15      # se descarta lo detectado dentro de un marcador (agrandado un 15 %)
-  max_rms_mm: 1.0             # si el error en las esquinas supera esto, se avisa al procesar la foto
+  max_rms_mm: 1.0             # error RMS máximo en las esquinas para exportar coordenadas
 
 # -----------------------------------------------------------------------------
 # Visión clásica (python -m ClassicVision.pipeline <foto o carpeta>)
@@ -270,6 +270,8 @@ pens:
   videos: data/pens/videos    # vídeos de los rotuladores (no se suben a git)
   frames: data/pens/frames    # fotos sacadas de los vídeos
   labels: data/pens/labels    # etiquetas YOLO hechas con SAM
+  frame_step: 20              # intervalo utilizado al extraer las fotos de las etiquetas versionadas
+  min_sharpness: 30           # nitidez mínima de aquella extracción (varianza del Laplaciano)
   dataset: ArtificialVision/pens_dataset   # dataset montado (train/val por vídeo) y su data.yaml
   model: ArtificialVision/models/yolo26n_pens.pt   # modelo entrenado
   sam_model: ArtificialVision/models/sam2.1_b.pt  # pesos de SAM 2.1 (los mismos que annotation.sam_model)

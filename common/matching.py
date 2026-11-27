@@ -95,8 +95,9 @@ def sequence_check(values, min_coverage=0.75):
     """
     known = [value for value in values if value is not None and value >= 1]
     present = set(known)
-    n = next((v for v in sorted(present, reverse=True)
-              if len(present & set(range(1, v + 1))) >= min_coverage * v), None)
+    # En orden ascendente, la posición indica cuántos valores distintos se han leído hasta v.
+    n = max((v for count, v in enumerate(sorted(present), start=1) if count / v >= min_coverage),
+            default=None)
     if n is None:
         return None
     counts = Counter(value for value in known if value <= n)

@@ -74,6 +74,8 @@ def sharpness(image):
 
 def extract_video(path, video_id, output, step, min_sharpness, jpeg_quality):
     """Guarda una foto de cada 'step' fotogramas. Devuelve (fotogramas leídos, guardadas, movidas)."""
+    if step < 1:
+        raise ValueError("El paso de extracción debe ser al menos 1.")
     capture = cv2.VideoCapture(str(path))
     if not capture.isOpened():
         print(f"No se puede abrir {path}")
@@ -106,6 +108,8 @@ def main():
     parser.add_argument("--min-sharpness", type=float, default=config["min_sharpness"],
                         help="descartar fotogramas con menos nitidez que esta (0 = no descartar)")
     args = parser.parse_args()
+    if args.step < 1:
+        parser.error("--step debe ser al menos 1.")
 
     videos = args.videos
     if not videos:

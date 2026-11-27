@@ -2,6 +2,7 @@
 
 import pytest
 
+from common import matching
 from common.matching import assign, match_dots_numbers, max_pair_distance, point_box_distance, sequence_check
 
 
@@ -104,6 +105,18 @@ def test_sequence_check():
     assert sequence_check([1, 2, 3, 4, 140]) == {"n": 4, "missing": [], "repeated": [], "out_of_range": [140]}
     assert sequence_check([87, 90, 120]) is None  # un trozo de ficha: no es una secuencia 1..N
     assert sequence_check([None]) is None
+
+
+def test_sequence_check_ignores_a_very_large_ocr_value(monkeypatch):
+    def short_range(*args):
+        assert max(args) <= 5
+        return range(*args)
+
+    monkeypatch.setattr(matching, "range", short_range, raising=False)
+    outlier = 10**400
+    assert sequence_check([1, 2, 4, outlier]) == {
+        "n": 4, "missing": [3], "repeated": [], "out_of_range": [outlier],
+    }
 
 
 def test_matching_recovers_the_generated_truth(generated_photos):

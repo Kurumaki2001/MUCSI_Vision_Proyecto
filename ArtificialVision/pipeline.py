@@ -40,13 +40,13 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from common.aruco_coords import (ArucoReference, add_mm_coordinates, draw_reference, inside_markers,
+from common.aruco_coords import (ArucoReference, add_mm_coordinates, describe_aruco, draw_reference, inside_markers,
                                            save_path_csv)
 from ArtificialVision.prepare_yolo import DOT_CLASS, tile_positions
 from common import json_format
 from common.config import load_config, project_path
 from common.drawing import draw_annotation
-from common.images import read_image, write_image
+from common.images import check_unique_image_stems, read_image, write_image
 from common.matching import match_dots_numbers, max_pair_distance, sequence_check
 
 OCR_MODES = ("page", "crops")
@@ -286,7 +286,7 @@ class Pipeline:
         return result
 
 
-def describe(result, max_rms_mm=None):
+def describe(result):
     """Resumen de una línea de un resultado, con el aviso de la secuencia si falta o se repite algo."""
     text = (f"{len(result['dots'])} puntos, {len(result['numbers'])} números, {len(result['pairs'])} parejas, "
             f"{result['times_ms']['total']:.0f} ms")
@@ -296,12 +296,7 @@ def describe(result, max_rms_mm=None):
                  f"fuera de rango {sequence['out_of_range']}")
     aruco = result["metadata"].get("aruco")
     if aruco is not None:
-        if not aruco["found"]:
-            text += f" | ArUco: hoja no encontrada (marcadores {aruco['markers']}), sin coordenadas en mm"
-        else:
-            text += f" | ArUco {aruco['markers']}: error {aruco['rms_mm']:.2f} mm"
-            if max_rms_mm is not None and aruco["rms_mm"] > max_rms_mm:
-                text += f" (¡más de {max_rms_mm} mm! revisa que la hoja esté plana y en el plano de la ficha)"
+        text += f" | {describe_aruco(aruco)}"
     return text
 
 
@@ -323,21 +318,25 @@ def main():
         images = sorted(path for path in args.source.iterdir() if path.suffix.lower() in IMAGE_EXTENSIONS)
     if not images:
         raise SystemExit(f"No hay fotos en {args.source}.")
+    check_unique_image_stems(images)
     output.mkdir(parents=True, exist_ok=True)
 
     print(f"Cargando modelos... (modo de OCR: {mode})")
     pipeline = Pipeline(config)
     for i, path in enumerate(images, start=1):
+        csv_path = output / f"{path.stem}_mm.csv"
+        csv_path.unlink(missing_ok=True)
         image = read_image(path)
         result = pipeline.process(image, path.name, mode)
         json_format.save(result, output / f"{path.stem}.json")
         drawing = draw_annotation(image, result, join_in_order=args.join or cfg["join_in_order"])
         if pipeline.last_reference is not None:
             draw_reference(drawing, pipeline.last_reference)
-            if pipeline.last_reference["found"]:
-                save_path_csv(result["metadata"]["aruco"], output / f"{path.stem}_mm.csv")
         write_image(output / f"{path.stem}.jpg", drawing, 90)
-        print(f"[{i}/{len(images)}] {path.name}: {describe(result, config.get('aruco', {}).get('max_rms_mm'))}")
+        aruco = result["metadata"].get("aruco")
+        if aruco is not None and aruco["found"]:
+            save_path_csv(aruco, csv_path)
+        print(f"[{i}/{len(images)}] {path.name}: {describe(result)}")
     print(f"Resultados en {output}")
 
 

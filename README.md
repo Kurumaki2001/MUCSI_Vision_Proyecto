@@ -190,9 +190,9 @@ Por cada foto se escriben tres ficheros:
 
 - `<foto>.json`: resultados en el formato común.
 - `<foto>.jpg`: dibujo de los puntos, las cajas con el valor leído y una línea de cada punto a su número. Lo que queda sin pareja sale en rojo; con `--join` también se dibuja el recorrido 1 → N.
-- `<foto>_mm.csv`: solo si aparece la hoja ArUco. Contiene número, x_mm e y_mm en orden numérico.
+- `<foto>_mm.csv`: si la referencia ArUco es válida. Contiene número, x_mm e y_mm en orden numérico.
 
-Por consola sale una línea por foto con el número de puntos, números y parejas, el tiempo, los números que faltan o se repiten en la secuencia 1..N y el error de la referencia ArUco.
+Por consola sale una línea por foto con el número de puntos, números y parejas, el tiempo, los números que faltan o se repiten en la secuencia 1..N y el estado de la referencia ArUco. Al reprocesar una foto se retira su CSV anterior y se escribe uno nuevo cuando el ajuste es válido.
 
 Si no se indica `--output`, los resultados van a `ArtificialVision/results/inference/<modo>/`.
 
@@ -263,14 +263,14 @@ python -m common.aruco_coords foto.png --point 640 480    # pasa un píxel a mm
 python -m common.aruco_coords carpeta/ --validate         # validación cruzada
 ```
 
-Para recalibrar la lente si cambia la cámara, la resolución, el enfoque o mucho la iluminación:
+Para recalibrar la lente si cambia la cámara, la resolución, el enfoque o mucho la iluminación, guarda las capturas en una carpeta dedicada. El calibrador rechaza carpetas con resoluciones mezcladas.
 
 ```powershell
-python -m common.aruco_capture       # a 1920x1080; ESPACIO o s guarda una foto, a = automático, q o ESC sale
-python -m common.aruco_calibrate     # calcula la distorsión y la guarda en calibracion_camara.json
+python -m common.aruco_capture --out aruco_sheet/captures_proyecto_1920x1080
+python -m common.aruco_calibrate aruco_sheet/captures_proyecto_1920x1080 --out aruco_sheet/calibracion_proyecto_1920x1080.json
 ```
 
-La calibración actual (`calibracion_camara.json`) es de la cámara de clase a 1280×960 (4:3). Con la cámara del proyecto (16:9) el código no la aplica, así que **hay que recalibrar** con los dos comandos anteriores.
+La calibración actual (`calibracion_camara.json`) es de la cámara de clase a 1280×960 (4:3). Para la cámara del proyecto (16:9), ejecuta los comandos anteriores y apunta `aruco.lens_calibration` al JSON generado. La inferencia exporta coordenadas cuando los IDs de la hoja son únicos y el error RMS está dentro de `aruco.max_rms_mm`.
 
 ### Tests
 

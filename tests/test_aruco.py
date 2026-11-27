@@ -1,12 +1,17 @@
 """Tests de las coordenadas reales con ArUco."""
 
+import sys
+
 import cv2
 import numpy as np
 import pytest
 
-from common.aruco_coords import (ArucoReference, add_mm_coordinates, inside_markers, leave_one_out,
-                                           load_sheet, to_mm)
+from ArtificialVision import pipeline as artificial_pipeline
+from ClassicVision import pipeline as classic_pipeline
+from common import aruco_calibrate, aruco_capture, json_format
+from common.aruco_coords import ArucoReference, add_mm_coordinates, inside_markers, leave_one_out, load_sheet, to_mm
 from common.config import load_config, project_path
+from common.images import write_image
 
 PX_PER_MM = 6
 CFG = {**load_config()["aruco"], "lens_calibration": None}  # la foto sintética no tiene distorsión
@@ -62,6 +67,40 @@ def test_not_enough_markers_gives_no_homography(photo):
     assert reference["ids"] == [0] and not reference["found"] and reference["homography"] is None
 
 
+def test_duplicate_sheet_marker_invalidates_the_reference(photo, monkeypatch):
+    finder = ArucoReference(CFG)
+    markers, all_markers = finder.detect_markers(photo)
+    duplicate = (0, markers[0] + [200, 0])
+    monkeypatch.setattr(finder, "detect_markers", lambda _: (markers, [*all_markers, duplicate]))
+    reference = finder.locate(photo)
+    assert reference["reason"] == "duplicate_markers" and reference["duplicate_ids"] == [0]
+    assert not reference["found"] and reference["homography"] is None
+    assert leave_one_out(finder, photo) == {}
+
+
+def test_inconsistent_markers_give_an_error_but_no_coordinates(photo, monkeypatch):
+    finder = ArucoReference(CFG)
+    markers = {i: mm_to_photo(corners) for i, corners in SHEET["corners"].items()}
+    markers[1] += [30, -10]
+    monkeypatch.setattr(finder, "detect_markers", lambda _: (markers, list(markers.items())))
+    reference = finder.locate(photo)
+    assert reference["reason"] == "high_rms" and reference["rms_mm"] > CFG["max_rms_mm"]
+    assert not reference["found"] and reference["homography"] is None
+    result = {"dots": [{"id": 0, "x": 10, "y": 20}], "numbers": [], "pairs": []}
+    summary = add_mm_coordinates(result, reference)
+    assert summary["reason"] == "high_rms" and summary["rms_mm"] > CFG["max_rms_mm"]
+    assert "path_mm" not in summary and "x_mm" not in result["dots"][0]
+
+
+def test_degenerate_markers_give_no_homography(photo, monkeypatch):
+    finder = ArucoReference(CFG)
+    markers = {i: np.column_stack((np.arange(i * 4, i * 4 + 4, dtype=float), np.ones(4))) for i in (0, 1)}
+    monkeypatch.setattr(finder, "detect_markers", lambda _: (markers, list(markers.items())))
+    reference = finder.locate(photo)
+    assert reference["reason"] == "invalid_homography"
+    assert not reference["found"] and reference["homography"] is None
+
+
 def test_leave_one_out_is_accurate_on_a_perfect_photo(photo):
     errors = leave_one_out(ArucoReference(CFG), photo)
     assert sorted(errors) == [0, 1, 2, 3]
@@ -94,3 +133,87 @@ def test_without_sheet_no_mm_coordinates_are_added():
     summary = add_mm_coordinates(result, reference)
     assert summary == {"found": False, "markers": [2], "lens_correction": False}
     assert "x_mm" not in result["dots"][0]
+
+
+def test_calibration_rejects_mixed_capture_resolutions(tmp_path, monkeypatch):
+    captures = tmp_path / "captures"
+    captures.mkdir()
+    write_image(captures / "first.png", np.zeros((48, 64, 3), np.uint8))
+    write_image(captures / "second.png", np.zeros((72, 128, 3), np.uint8))
+    output = tmp_path / "lens.json"
+    output.write_text("calibración anterior", encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["aruco_calibrate", str(captures), "--out", str(output)])
+
+    with pytest.raises(SystemExit, match="second.png tiene 128x72; se esperaba 64x48"):
+        aruco_calibrate.main()
+
+    assert output.read_text(encoding="utf-8") == "calibración anterior"
+
+
+def test_capture_checks_actual_frame_resolution_before_saving(tmp_path, monkeypatch):
+    previous = tmp_path / "previous.png"
+    write_image(previous, np.zeros((48, 64, 3), np.uint8))
+    frame = np.zeros((72, 128, 3), np.uint8)
+
+    class FakeCamera:
+        def get(self, prop):
+            return 64 if prop == cv2.CAP_PROP_FRAME_WIDTH else 48  # la resolución real es otra
+
+        def read(self):
+            return True, frame
+
+        def release(self):
+            pass
+
+    monkeypatch.setattr(aruco_capture, "open_camera", lambda *_: FakeCamera())
+    monkeypatch.setattr(sys, "argv", ["aruco_capture", "--out", str(tmp_path), "--no-gui", "--interval", "1", "--count", "1"])
+    with pytest.raises(SystemExit, match="128x72.*64x48.*--out"):
+        aruco_capture.main()
+    assert list(tmp_path.iterdir()) == [previous]
+
+
+@pytest.mark.parametrize("module", [classic_pipeline, artificial_pipeline])
+def test_inference_publishes_csv_only_for_the_current_valid_result(module, tmp_path, monkeypatch):
+    image_path = tmp_path / "ficha.png"
+    write_image(image_path, np.zeros((20, 20, 3), np.uint8))
+    output = tmp_path / "output"
+    csv_path = output / "ficha_mm.csv"
+    references = iter([
+        {"found": True, "markers": [0, 1], "rms_mm": 0.2, "path_mm": [{"value": 1, "x_mm": 4, "y_mm": 5}]},
+        {"found": False, "markers": []},
+    ])
+
+    class FakePipeline:
+        last_reference = None
+
+        def __init__(self, _config):
+            pass
+
+        def process(self, image, name, *_args):
+            assert not csv_path.exists()
+            return json_format.create(name, image.shape[1], image.shape[0], [], [], [], times_ms={"total": 0},
+                                      metadata={"sequence": None, "aruco": next(references)})
+
+    monkeypatch.setattr(module, "Pipeline", FakePipeline)
+    monkeypatch.setattr(sys, "argv", ["pipeline", str(image_path), "--output", str(output)])
+
+    module.main()
+    assert csv_path.read_text(encoding="utf-8") == "value,x_mm,y_mm\n1,4,5\n"
+    module.main()
+    assert not csv_path.exists()
+    assert not json_format.load(output / "ficha.json")["metadata"]["aruco"]["found"]
+
+
+@pytest.mark.parametrize("module", [classic_pipeline, artificial_pipeline])
+def test_inference_rejects_output_collisions_before_writing(module, tmp_path, monkeypatch):
+    source = tmp_path / "input"
+    source.mkdir()
+    for name in ("Ficha.png", "ficha.jpg"):
+        (source / name).touch()
+    output = tmp_path / "output"
+    monkeypatch.setattr(sys, "argv", ["pipeline", str(source), "--output", str(output)])
+
+    with pytest.raises(SystemExit, match="mismo nombre de salida"):
+        module.main()
+
+    assert not output.exists()

@@ -11,6 +11,16 @@ import cv2
 import numpy as np
 
 
+def check_unique_image_stems(paths):
+    """Evita que dos imágenes escriban sobre los mismos archivos de salida."""
+    names = {}
+    for path in paths:
+        key = path.stem.casefold()
+        if key in names:
+            raise SystemExit(f"{names[key]} y {path.name} tienen el mismo nombre de salida. Renombra una de las fotos.")
+        names[key] = path.name
+
+
 def read_image(path):
     """Lee una imagen en color. Como todo en OpenCV, los canales van en orden BGR."""
     image = cv2.imdecode(np.fromfile(str(path), dtype=np.uint8), cv2.IMREAD_COLOR)

@@ -28,7 +28,7 @@ import cv2
 import numpy as np
 from scipy.optimize import least_squares, minimize, minimize_scalar
 
-from common.aruco_coords import IMAGE_EXTENSIONS, LensModel, edge_refine, make_detector, sharpness
+from common.aruco_coords import IMAGE_EXTENSIONS, LensModel, duplicate_sheet_ids, edge_refine, make_detector, sharpness
 from common.config import load_config, project_path
 from common.images import read_image
 
@@ -131,20 +131,27 @@ def main():
 
     # 1. Fotos útiles: nítidas y con suficientes marcadores de la hoja
     detector = make_detector(sheet.get("dictionary", "DICT_4X4_50"))
-    files = sorted(p for p in args.folder.iterdir() if p.suffix.lower() in IMAGE_EXTENSIONS) if args.folder.is_dir() else []
+    files = sorted(p for p in args.folder.glob("*") if p.suffix.lower() in IMAGE_EXTENSIONS and p.is_file())
     frames, shape = [], None
     for path in files:
         gray = cv2.cvtColor(read_image(path), cv2.COLOR_BGR2GRAY)
+        if shape is None:
+            shape = gray.shape
+        elif gray.shape != shape:
+            height, width = gray.shape
+            raise SystemExit(f"{path.name} tiene {width}x{height}; se esperaba {shape[1]}x{shape[0]}. "
+                             "Usa una carpeta distinta para cada cámara y resolución.")
         if sharpness(gray) < args.min_sharp:
             continue
         corners, ids, _ = detector.detectMarkers(gray)
         if ids is None:
             continue
+        if duplicate_sheet_ids(ids.ravel(), centers_true):
+            continue
         raw = {int(i): c.reshape(4, 2) for c, i in zip(corners, ids.ravel()) if int(i) in centers_true}
         if len(raw) < args.min_markers:
             continue
         frames.append({"smooth": cv2.GaussianBlur(gray, (0, 0), 1.0).astype(np.float32), "raw": raw})
-        shape = gray.shape
     if len(frames) < 3:
         raise SystemExit(f"Solo {len(frames)} fotos útiles en {args.folder} (≥{args.min_markers} marcadores y "
                          "nítidas). Captura más con python -m common.aruco_capture")
