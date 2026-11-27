@@ -1,0 +1,21 @@
+{
+  "dataset": "C:\\Users\\User\\Desktop\\Master IA\\Deusto\\Vision\\MUCSI_Vision_Proyecto\\ArtificialVision\\pens_dataset\\data.yaml",
+  "device": "0",
+  "completed_epochs": 62,
+  "best_epoch": 42,
+  "training_minutes": 1.8,
+  "validation": {
+    "precision": 0.9765,
+    "recall": 0.9778,
+    "mAP50": 0.9678,
+    "mAP50-95": 0.9212,
+    "per_class": {
+      "rotulador": {
+        "precision": 0.9765,
+        "recall": 0.9778,
+        "mAP50": 0.9678,
+        "mAP50-95": 0.9212
+      }
+    }
+  }
+}
